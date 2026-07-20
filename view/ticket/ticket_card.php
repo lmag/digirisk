@@ -37,6 +37,7 @@ require_once DOL_DOCUMENT_ROOT . '/core/class/html.form.class.php';
 require_once DOL_DOCUMENT_ROOT . '/core/class/html.formprojet.class.php';
 require_once DOL_DOCUMENT_ROOT . '/categories/class/categorie.class.php';
 require_once DOL_DOCUMENT_ROOT . '/comm/action/class/actioncomm.class.php';
+require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
 
 global $conf, $db, $hookmanager, $langs, $moduleNameLowerCase, $user;
 
@@ -93,6 +94,18 @@ if ($action === 'setsubject_ajax' && $permissionToWrite) {
     exit;
 }
 
+// AJAX: inline (on-the-fly) extrafield save
+if ($action === 'setextrafield_ajax' && $permissionToWrite) {
+    $field = GETPOST('field', 'alpha');
+    $value = GETPOST('value', 'none');
+    $object->fetch($id);
+    $object->array_options['options_' . $field] = $value;
+    $res = $object->insertExtraFields();
+    header('Content-Type: application/json');
+    print json_encode(['success' => ($res >= 0), 'field' => $field, 'value' => $value]);
+    exit;
+}
+
 // AJAX: inline (on-the-fly) assignee save — returns getNomUrl so the display stays a proper user link
 if ($action === 'setassignee_ajax' && $permissionToWrite) {
     $newUserId = GETPOSTINT('user_id');
@@ -108,6 +121,44 @@ if ($action === 'setassignee_ajax' && $permissionToWrite) {
     }
     header('Content-Type: application/json');
     print json_encode(['success' => 1, 'nomurl' => $nomUrl]);
+    exit;
+}
+
+// AJAX: inline (on-the-fly) thirdparty save — returns structured data to rebuild the badge
+if ($action === 'setthirdparty_ajax' && $permissionToWrite) {
+    $newSocId = GETPOSTINT('socid');
+    $object->fetch($id);
+    $object->setCustomer($newSocId);
+    $socName    = '';
+    $cardUrl    = '';
+    $historyUrl = '';
+    if ($newSocId > 0) {
+        $soc = new Societe($db);
+        $soc->fetch($newSocId);
+        $socName    = trim($soc->name);
+        $cardUrl    = DOL_URL_ROOT . '/societe/card.php?socid=' . $newSocId;
+        $historyUrl = DOL_URL_ROOT . '/ticket/list.php?socid=' . $newSocId . '&sortfield=t.datec&sortorder=desc';
+    }
+    header('Content-Type: application/json');
+    print json_encode(['success' => 1, 'id' => $newSocId, 'name' => $socName, 'cardurl' => $cardUrl, 'historyurl' => $historyUrl]);
+    exit;
+}
+
+// AJAX: inline (on-the-fly) project save — returns structured data to rebuild the badge
+if ($action === 'setproject_ajax' && $permissionToWrite) {
+    $newProjectId = GETPOSTINT('projectid');
+    $object->fetch($id);
+    $object->setProject($newProjectId);
+    $projRef = '';
+    $cardUrl = '';
+    if ($newProjectId > 0) {
+        $proj = new Project($db);
+        $proj->fetch($newProjectId);
+        $projRef = trim($proj->ref);
+        $cardUrl = DOL_URL_ROOT . '/projet/card.php?id=' . $newProjectId;
+    }
+    header('Content-Type: application/json');
+    print json_encode(['success' => 1, 'id' => $newProjectId, 'name' => $projRef, 'cardurl' => $cardUrl]);
     exit;
 }
 
@@ -128,10 +179,280 @@ if ($action === 'setprogress_ajax' && $permissionToWrite) {
     exit;
 }
 
-// Action: classify (set project — native form_project posts action=classin)
-if ($action === 'classin' && $permissionToWrite) {
+// AJAX: inline (on-the-fly) progress save for tasks
+if ($action === 'set_task_progress_ajax' && $permissionToWrite) {
+    require_once DOL_DOCUMENT_ROOT . '/projet/class/task.class.php';
+    $taskObj = new Task($db);
+    $taskObj->fetch(GETPOSTINT('id'));
+    $newProgress = GETPOSTINT('progress');
+    if ($newProgress < 0) {
+        $newProgress = 0;
+    }
+    if ($newProgress > 100) {
+        $newProgress = 100;
+    }
+    $taskObj->progress = $newProgress;
+    $taskObj->update($user);
+    header('Content-Type: application/json');
+    print json_encode(['success' => 1, 'progress' => (int) $taskObj->progress]);
+    exit;
+}
+
+// AJAX: post a conversation message (note interne here; public recipients + email in later steps)
+if ($action === 'post_message_ajax' && $permissionToWrite) {
+    $body    = trim(GETPOST('body', 'restricthtml'));
+    $subject = trim(GETPOST('subject', 'alphanohtml'));
+    $private = GETPOSTINT('private');
+    $toList  = GETPOST('to', 'array') ?: [];
+    $ccList  = GETPOST('cc', 'array') ?: [];
+    if ($body === '') {
+        header('Content-Type: application/json');
+        print json_encode(['success' => 0, 'message' => $langs->trans('ErrorBadParameters')]);
+        exit;
+    }
     $object->fetch($id);
-    $object->setProject(GETPOSTINT('projectid'));
+    $object->subject = $subject ?: ($object->subject ?? '');
+    $object->message = $body;
+    $object->private = $private;
+    $willMail = (!$private && (!empty($toList) || !empty($ccList)));
+    $newMsgId = $object->createTicketMessage($user, 0, [], [], [], $willMail);
+    if (!$newMsgId || $newMsgId <= 0) {
+        header('Content-Type: application/json');
+        print json_encode(['success' => 0, 'message' => $object->error ?: $langs->trans('Error')]);
+        exit;
+    }
+    // Process uploaded attachments: move into the ticket dir + index in ecm_files (linked to the message).
+    $fileNameList     = [];
+    $mimeTypeList     = [];
+    $mimeFileNameList = [];
+    if (!empty($_FILES['files']) && !empty($_FILES['files']['name'])) {
+        require_once DOL_DOCUMENT_ROOT . '/ecm/class/ecmfiles.class.php';
+        $ticketDir = $conf->ticket->dir_output . '/' . dol_sanitizeFileName($object->ref);
+        dol_mkdir($ticketDir);
+        $relDir    = 'ticket/' . dol_sanitizeFileName($object->ref);
+        $fileNames = (array) $_FILES['files']['name'];
+        $fileTmps  = (array) $_FILES['files']['tmp_name'];
+        $nbFiles   = count($fileNames);
+        for ($fi = 0; $fi < $nbFiles; $fi++) {
+            if (empty($fileNames[$fi]) || empty($fileTmps[$fi])) {
+                continue;
+            }
+            $safeName = dol_sanitizeFileName($fileNames[$fi]);
+            $destFile = $ticketDir . '/' . $safeName;
+            if (dol_move_uploaded_file($fileTmps[$fi], $destFile, 1) > 0) {
+                $fileNameList[]     = $destFile;
+                $mimeTypeList[]     = dol_mimetype($destFile);
+                $mimeFileNameList[] = $safeName;
+                $ecmFile = new EcmFiles($db);
+                $ecmFile->filepath        = $relDir;
+                $ecmFile->filename        = $safeName;
+                $ecmFile->fullpath_orig   = $safeName;
+                $ecmFile->gen_or_uploaded = 'uploaded';
+                $ecmFile->entity          = $conf->entity;
+                $ecmFile->src_object_type = 'ticket';
+                $ecmFile->src_object_id   = (int) $object->id;
+                $ecmFile->agenda_id       = (int) $newMsgId;
+                if ($ecmFile->create($user) <= 0) {
+                    dol_syslog('ticket conversation: ecm index failed for ' . $destFile, LOG_WARNING);
+                }
+            }
+        }
+    }
+    $mailNotice = '';
+    if ($willMail && !getDolGlobalString('TICKET_DISABLE_ALL_MAILS')) {
+        $sendto   = [];
+        $sendtocc = [];
+        foreach ($toList as $recipient) {
+            $recipient = trim((string) $recipient);
+            if (filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+                $sendto[$recipient] = $recipient;
+            }
+        }
+        foreach ($ccList as $recipient) {
+            $recipient = trim((string) $recipient);
+            if (filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+                $sendtocc[$recipient] = $recipient;
+            }
+        }
+        if (!empty($sendto)) {
+            global $mysoc;
+            $modelId       = GETPOSTINT('model_id');
+            $mailSubject   = $subject;
+            $mailBodyInner = $body;
+            if ($modelId > 0) {
+                require_once DOL_DOCUMENT_ROOT . '/core/class/html.formmail.class.php';
+                $formmailTpl = new FormMail($db);
+                $tpl = $formmailTpl->getEMailTemplate($db, 'ticket_send', $user, $langs, $modelId);
+                if (is_object($tpl)) {
+                    if ($mailSubject === '' && !empty($tpl->topic)) {
+                        $mailSubject = $tpl->topic;
+                    }
+                    if (!empty($tpl->content)) {
+                        $mailBodyInner = $tpl->content . '<br><br>' . $body;
+                    }
+                }
+            }
+            $appli = getDolGlobalString('MAIN_APPLICATION_TITLE', !empty($mysoc->name) ? $mysoc->name : 'Dolibarr');
+            if ($mailSubject === '') {
+                $mailSubject = '[' . $appli . ' - ' . $langs->transnoentities('Ticket') . ' #' . $object->track_id . '] ' . $langs->transnoentities('TicketNewMessage');
+            }
+            $intro     = getDolGlobalString('TICKET_MESSAGE_MAIL_INTRO', $langs->transnoentities('TicketMessageMailIntroText'));
+            $signature = getDolGlobalString('TICKET_MESSAGE_MAIL_SIGNATURE');
+            $urlTicket = dol_buildpath('/ticket/card.php', 2) . '?track_id=' . $object->track_id;
+            $mailBody  = ($intro !== '' ? $intro . '<br><br>' : '') . $mailBodyInner . '<br><br>'
+                . $langs->transnoentities('TicketNotificationEmailBodyInfosTrackUrlinternal') . ' : <a href="' . $urlTicket . '">' . $object->track_id . '</a>'
+                . (!empty($signature) ? '<br><br>' . $signature : '');
+            $from    = getDolGlobalString('TICKET_NOTIFICATION_EMAIL_FROM');
+            $replyto = getDolGlobalString('TICKET_NOTIFICATION_EMAIL_REPLYTO');
+            $sentOk  = $object->sendTicketMessageByEmail($mailSubject, $mailBody, 0, $sendto, $sendtocc, $fileNameList, $mimeTypeList, $mimeFileNameList, $from, $replyto);
+            // Persist recipients on the actioncomm so past public messages show To/Cc chips.
+            $db->query('UPDATE ' . MAIN_DB_PREFIX . "actioncomm SET email_to = '" . $db->escape(implode(',', array_keys($sendto))) . "', email_tocc = '" . $db->escape(implode(',', array_keys($sendtocc))) . "' WHERE id = " . (int) $newMsgId);
+            $mailNotice = $sentOk
+                ? ' — ' . $langs->transnoentities('MailSentToNRecipients', (string) count($sendto))
+                : ' — ' . $langs->transnoentities('MailNotSent');
+        } else {
+            $mailNotice = ' — ' . $langs->trans('NoRecipientFound');
+        }
+    }
+    // Notify mentioned agents (@mentions on internal notes) + record them on the message.
+    $mentions     = GETPOST('mentions', 'array') ?: [];
+    $mentionNames = [];
+    if (!empty($mentions)) {
+        require_once DOL_DOCUMENT_ROOT . '/core/class/CMailFile.class.php';
+        $ticketUrlAbs = dol_buildpath('/custom/digiriskdolibarr/view/ticket/ticket_card.php', 2) . '?id=' . (int) $object->id;
+        $mentionFrom  = getDolGlobalString('TICKET_NOTIFICATION_EMAIL_FROM', getDolGlobalString('MAIN_MAIL_EMAIL_FROM'));
+        foreach ($mentions as $mentionUid) {
+            $mentionUid = (int) $mentionUid;
+            if ($mentionUid <= 0) {
+                continue;
+            }
+            $mentionUser = new User($db);
+            if ($mentionUser->fetch($mentionUid) <= 0) {
+                continue;
+            }
+            $mentionNames[] = $mentionUser->getFullName($langs) ?: $mentionUser->login;
+            if ($mentionUid !== (int) $user->id && !empty($mentionUser->email) && !getDolGlobalString('TICKET_DISABLE_ALL_MAILS')) {
+                $mentionSubject = $langs->trans('YouWereMentionedOnTicket', $object->ref);
+                $mentionBody    = $langs->trans('YouWereMentionedOnTicketBody', $user->getFullName($langs), $object->ref) . '<br><br>' . $body . '<br><br><a href="' . $ticketUrlAbs . '">' . dol_escape_htmltag($object->ref) . '</a>';
+                $mentionMail    = new CMailFile($mentionSubject, $mentionUser->email, $mentionFrom, $mentionBody, [], [], [], '', '', 0, 1);
+                $mentionMail->sendfile();
+            }
+        }
+        // Record the mentioned names on the private note (email_to is free for notes).
+        if ($private && !empty($mentionNames)) {
+            $db->query('UPDATE ' . MAIN_DB_PREFIX . "actioncomm SET email_to = '" . $db->escape(implode(', ', $mentionNames)) . "' WHERE id = " . (int) $newMsgId);
+        }
+    }
+    // Build the V2 bubble via the shared lib helper so it matches the initial render.
+    $bubbleItem            = new stdClass();
+    $bubbleItem->id        = (int) $newMsgId;
+    $bubbleItem->type      = $private ? 'internal' : 'public';
+    $bubbleItem->mine      = true;
+    $bubbleItem->author    = $user->getFullName($langs) ?: $user->login;
+    $bubbleItem->av_uid    = $user->id;
+    $bubbleItem->av_first  = $user->firstname;
+    $bubbleItem->av_last   = $user->lastname;
+    $bubbleItem->av_login  = $user->login;
+    $bubbleItem->av_photo  = $user->photo;
+    $bubbleItem->ts        = (int) dol_now();
+    $bubbleItem->subject   = $subject;
+    $bubbleItem->body_html = dolPrintHTML($body);
+    $bubbleItem->sent_mail  = (bool) $willMail;
+    $bubbleItem->to         = $private ? [] : $toList;
+    $bubbleItem->cc         = $private ? [] : $ccList;
+    $bubbleItem->mentions   = $private ? $mentionNames : [];
+    $bubbleItem->file_count = count($fileNameList);
+    $bubble = digiriskdolibarr_ticket_conversation_bubble($langs, $conf, $bubbleItem, (int) dol_now());
+    header('Content-Type: application/json');
+    print json_encode(['success' => 1, 'message' => $langs->trans('MessagePosted') . $mailNotice, 'message_id' => (int) $newMsgId, 'bubble' => $bubble]);
+    exit;
+}
+
+// AJAX: edit own conversation message (author-only)
+if ($action === 'edit_message_ajax' && $permissionToWrite) {
+    $msgId   = GETPOSTINT('message_id');
+    $newBody = trim(GETPOST('body', 'restricthtml'));
+    require_once DOL_DOCUMENT_ROOT . '/comm/action/class/actioncomm.class.php';
+    $ac = new ActionComm($db);
+    $ac->fetch($msgId);
+    header('Content-Type: application/json');
+    if ($ac->id > 0 && (int) $ac->userownerid === (int) $user->id && strpos((string) $ac->code, 'TICKET_MSG') === 0 && $newBody !== '') {
+        $ac->note_private = $newBody;
+        $ac->note         = $newBody;
+        if ($ac->update($user) > 0) {
+            print json_encode(['success' => 1, 'body_html' => dolPrintHTML($newBody)]);
+            exit;
+        }
+    }
+    print json_encode(['success' => 0, 'message' => $langs->trans('NotAllowed')]);
+    exit;
+}
+
+// AJAX: delete own conversation message (author-only)
+if ($action === 'delete_message_ajax' && $permissionToWrite) {
+    $msgId = GETPOSTINT('message_id');
+    require_once DOL_DOCUMENT_ROOT . '/comm/action/class/actioncomm.class.php';
+    $ac = new ActionComm($db);
+    $ac->fetch($msgId);
+    header('Content-Type: application/json');
+    if ($ac->id > 0 && (int) $ac->userownerid === (int) $user->id && strpos((string) $ac->code, 'TICKET_MSG') === 0) {
+        if ($ac->delete($user) > 0) {
+            print json_encode(['success' => 1]);
+            exit;
+        }
+    }
+    print json_encode(['success' => 0, 'message' => $langs->trans('NotAllowed')]);
+    exit;
+}
+
+// Action: create parent task manually (#4881)
+if ($action === 'create_parent_task' && $permissionToWrite && !empty($object->fk_project)) {
+    require_once DOL_DOCUMENT_ROOT . '/projet/class/task.class.php';
+    $t = new Task($db);
+    $t->fk_project = $object->fk_project;
+    $t->ref = 'TKP-' . $object->ref;
+    $t->label = $langs->trans('Ticket') . ' ' . $object->ref;
+    $t->progress = 0;
+    $t->create($user);
+    $db->query("UPDATE " . MAIN_DB_PREFIX . "projet_task SET ref = '" . $db->escape($t->ref) . "' WHERE rowid = " . (int) $t->id);
+    header('Location: ' . $url_page_current . '?id=' . $object->id);
+    exit;
+}
+
+// Action: add child task from popup (#4881)
+if ($action === 'add_child_task_modal' && $permissionToWrite && !empty($object->fk_project)) {
+    require_once DOL_DOCUMENT_ROOT . '/projet/class/task.class.php';
+    $t = new Task($db);
+    $t->fk_project = $object->fk_project;
+    $t->fk_task_parent = GETPOST('task_parent', 'int');
+    $t->label = GETPOST('label', 'alphanohtml');
+    $t->date_start = dol_mktime(0, 0, 0, GETPOST('date_startmonth', 'int'), GETPOST('date_startday', 'int'), GETPOST('date_startyear', 'int'));
+    $t->date_end = dol_mktime(0, 0, 0, GETPOST('date_endmonth', 'int'), GETPOST('date_endday', 'int'), GETPOST('date_endyear', 'int'));
+    
+    // Parse datetime-local from standard input if used
+    $date_start_local = GETPOST('date_start_local', 'alpha');
+    if (!empty($date_start_local)) $t->date_start = strtotime($date_start_local);
+    $date_end_local = GETPOST('date_end_local', 'alpha');
+    if (!empty($date_end_local)) $t->date_end = strtotime($date_end_local);
+
+    $t->planned_workload = 0;
+    $t->progress = 0;
+    $t->budget_amount = GETPOST('budget', 'int');
+    
+    // Auto-generate ref using task numbering module
+    $classnamemodtask = getDolGlobalString('PROJECT_TASK_ADDON', 'mod_task_simple');
+    if (getDolGlobalString('PROJECT_TASK_ADDON') && is_readable(DOL_DOCUMENT_ROOT."/core/modules/project/task/" . getDolGlobalString('PROJECT_TASK_ADDON').".php")) {
+        require_once DOL_DOCUMENT_ROOT."/core/modules/project/task/" . getDolGlobalString('PROJECT_TASK_ADDON').'.php';
+        $modTask = new $classnamemodtask();
+        $t->ref = $modTask->getNextValue($object->thirdparty, $object);
+    }
+    
+    $t->create($user);
+    
+    $executive_id = GETPOST('user_id', 'int');
+    if ($executive_id > 0) {
+        $t->add_contact($executive_id, 'TASKEXECUTIVE', 'internal');
+    }
     header('Location: ' . $url_page_current . '?id=' . $object->id);
     exit;
 }
@@ -172,6 +493,12 @@ if ($action === 'confirm_set_status' && $permissionToWrite && !GETPOST('cancel')
     }
     setEventMessages($object->error, $object->errors, 'errors');
 }
+
+// Ticket attached-files box — native generate/delete handling for the showdocuments widget (same as the native ticket card).
+$upload_dir         = $conf->ticket->dir_output;
+$permissiontoadd    = $permissionToWrite ? 1 : 0;
+$permissiontodelete = $permissionToWrite ? 1 : 0;
+include DOL_DOCUMENT_ROOT . '/core/actions_builddoc.inc.php';
 
 /*
  * View
@@ -218,30 +545,65 @@ if ($object->fk_user_create > 0) {
     $morehtmlref .= $fuser->getNomUrl(-1);
 }
 
-// Thirdparty
+// Thirdparty (reedcrm-style inline badge: logo + nav icon + editable name + hidden select2)
 if (isModEnabled('societe')) {
     $morehtmlref .= '<br>';
-    $morehtmlref .= img_picto($langs->trans('ThirdParty'), 'company', 'class="pictofixedwidth"');
-    if ($object->socid > 0 && is_object($object->thirdparty)) {
-        $morehtmlref .= $object->thirdparty->getNomUrl(1);
-    } else {
-        $morehtmlref .= '<span class="opacitymedium">' . $langs->trans('NoThirdParty') . '</span>';
+    $hasSoc    = ($object->socid > 0 && is_object($object->thirdparty));
+    $socUrl    = $hasSoc ? DOL_URL_ROOT . '/societe/card.php?socid=' . (int) $object->socid : '#';
+    $histUrl   = $hasSoc ? DOL_URL_ROOT . '/ticket/list.php?socid=' . (int) $object->socid . '&sortfield=t.datec&sortorder=desc' : '';
+    $emptyLabel = $langs->trans('SetThirdParty');
+    $morehtmlref .= '<span class="dtc-inline-badge dtc-thirdparty" data-ticket-id="' . (int) $object->id . '" data-url="' . dol_escape_htmltag($url_page_current) . '" data-empty-label="' . dol_escape_htmltag($emptyLabel) . '">';
+    $morehtmlref .= img_picto('', 'digiriskdolibarr_color@digiriskdolibarr', 'class="dtc-badge-logo"');
+    $morehtmlref .= '<a class="dtc-badge-nav" href="' . dol_escape_htmltag($socUrl) . '" title="' . dol_escape_htmltag($langs->trans('ThirdParty')) . '"' . ($hasSoc ? '' : ' style="display:none;"') . '><i class="fas fa-building"></i></a>';
+    $nameClass = 'dtc-thirdparty-name dtc-badge-name' . ($permissionToWrite ? ' dtc-inline-edit' : '') . ($hasSoc ? '' : ' is-empty');
+    $nameText  = $hasSoc ? dol_escape_htmltag($object->thirdparty->name) : dol_escape_htmltag($emptyLabel);
+    $nameTitle = $permissionToWrite ? $langs->trans('SetThirdParty') : $langs->trans('ThirdParty');
+    $morehtmlref .= '<a class="' . $nameClass . '" href="' . dol_escape_htmltag($socUrl) . '" title="' . dol_escape_htmltag($nameTitle) . '">' . $nameText . '</a>';
+    $morehtmlref .= '<a class="dtc-badge-history" href="' . dol_escape_htmltag($histUrl) . '" title="' . dol_escape_htmltag($langs->trans('TicketHistory')) . '"' . ($hasSoc ? '' : ' style="display:none;"') . '><i class="fas fa-ticket-alt"></i></a>';
+    if ($permissionToWrite) {
+        $morehtmlref .= '<span class="dtc-thirdparty-selector dtc-inline-selector" style="display:none;">';
+        $morehtmlref .= $form->select_company((int) $object->socid, 'dtc_thirdparty_select', '', 1, 0, 1, [], 0, 'dtc-inline-select minwidth200');
+        $morehtmlref .= '</span>';
     }
+    $morehtmlref .= '</span>';
 }
 
-// Project
+// Project (reedcrm-style inline badge: logo + nav icon + editable name + hidden select2)
 if (isModEnabled('project')) {
     $morehtmlref .= '<br>';
     $object->fetchProject();
-    $morehtmlref .= img_picto($langs->trans('Project'), 'project', 'class="pictofixedwidth"');
+    $hasProject      = (!empty($object->fk_project) && is_object($object->project));
+    $projUrl         = $hasProject ? DOL_URL_ROOT . '/projet/card.php?id=' . (int) $object->fk_project : '#';
+    $emptyProjLabel  = $langs->trans('SetProject');
+    $morehtmlref .= '<span class="dtc-inline-badge dtc-project" data-ticket-id="' . (int) $object->id . '" data-url="' . dol_escape_htmltag($url_page_current) . '" data-empty-label="' . dol_escape_htmltag($emptyProjLabel) . '">';
+    $morehtmlref .= img_picto('', 'digiriskdolibarr_color@digiriskdolibarr', 'class="dtc-badge-logo"');
+    $morehtmlref .= '<a class="dtc-badge-nav" href="' . dol_escape_htmltag($projUrl) . '" title="' . dol_escape_htmltag($langs->trans('Project')) . '"' . ($hasProject ? '' : ' style="display:none;"') . '><i class="fas fa-project-diagram"></i></a>';
+    $projNameClass = 'dtc-project-name dtc-badge-name' . ($permissionToWrite ? ' dtc-inline-edit' : '') . ($hasProject ? '' : ' is-empty');
+    $projNameText  = $hasProject ? dol_escape_htmltag($object->project->ref) : dol_escape_htmltag($emptyProjLabel);
+    $projNameTitle = $permissionToWrite ? $langs->trans('SetProject') : $langs->trans('Project');
+    $morehtmlref .= '<a class="' . $projNameClass . '" href="' . dol_escape_htmltag($projUrl) . '" title="' . dol_escape_htmltag($projNameTitle) . '">' . $projNameText . '</a>';
     if ($permissionToWrite) {
-        if ($action != 'classify') {
-            $morehtmlref .= '<a class="editfielda" href="' . $url_page_current . '?action=classify&token=' . newToken() . '&id=' . $object->id . '">' . img_edit($langs->transnoentitiesnoconv('SetProject')) . '</a> ';
+        require_once DOL_DOCUMENT_ROOT . '/core/class/html.formprojet.class.php';
+        $formproject = new FormProjets($db);
+        // mode=1 → array; we build a plain <select> (avoids the search-to-select autocompleter), select2-ified by JS on reveal.
+        $projectArray = $formproject->select_projects_list((int) $object->socid, (string) $object->fk_project, 'dtc_project_select', 24, 0, 0, 0, 0, 0, 1, '', 1, 0, '', '', '');
+        $morehtmlref .= '<span class="dtc-project-selector dtc-inline-selector" style="display:none;">';
+        $morehtmlref .= '<select class="dtc-inline-select minwidth200" id="dtc_project_select" name="dtc_project_select">';
+        $morehtmlref .= '<option value="0"' . (empty($object->fk_project) ? ' selected' : '') . '></option>';
+        if (is_array($projectArray)) {
+            foreach ($projectArray as $projLine) {
+                $projId = (int) $projLine['key'];
+                if ($projId <= 0) {
+                    continue;
+                }
+                $selectedAttr = ($projId === (int) $object->fk_project) ? ' selected' : '';
+                $morehtmlref .= '<option value="' . $projId . '"' . $selectedAttr . '>' . dol_escape_htmltag($projLine['value']) . '</option>';
+            }
         }
-        $morehtmlref .= $form->form_project($url_page_current . '?id=' . $object->id, $object->socid, (string) $object->fk_project, ($action == 'classify' ? 'projectid' : 'none'), 0, 0, 0, 1, '', 'maxwidth300');
-    } elseif (!empty($object->fk_project) && is_object($object->project)) {
-        $morehtmlref .= $object->project->getNomUrl(1);
+        $morehtmlref .= '</select>';
+        $morehtmlref .= '</span>';
     }
+    $morehtmlref .= '</span>';
 }
 
 $morehtmlref .= '</div>';
@@ -255,14 +617,14 @@ print '<div class="fichecenter">';
 /*
  * Left column
  */
-print '<div class="fichehalfleft">';
+print '<div class="fichehalfleft" style="overflow: hidden; min-width: 0;">';
 print '<div class="underbanner clearboth"></div>';
 
 // ---- Titre du message (label + subject on the same line, inline on-the-fly edit) ----
 $subjectRaw = (string) ($object->subject ?? '');
 print '<table class="border centpercent tableforfield"><tbody>';
 print '<tr class="liste_titre trforfield"><td colspan="2"><div class="dtc-head">';
-print '<span class="dtc-head-label">' . $langs->trans('TicketMessageTitle') . '</span>';
+print '<span class="dtc-head-label">' . $langs->trans('Subject') . '</span>';
 print '<span class="dtc-subject" data-value="' . dol_escape_htmltag($subjectRaw) . '">';
 if ($subjectRaw !== '') {
     print '<span class="dtc-subject-value">' . dolPrintLabel($subjectRaw) . '</span>';
@@ -281,22 +643,20 @@ print '<input type="hidden" name="id" value="' . (int) $object->id . '">';
 print '<table class="border centpercent tableforfield"><tbody>';
 print '<tr class="liste_titre trforfield"><td colspan="2"><div class="dtc-head">';
 print $langs->trans('TicketInitialMessage');
-print '<span class="dtc-head-edit">';
-if ($permissionToWrite && $action === 'editmessage') {
-    print '<input type="submit" class="button button-edit smallpaddingimp" value="' . $langs->trans('Modify') . '"> ';
-    print '<input type="submit" class="button button-cancel smallpaddingimp" name="cancel" value="' . $langs->trans('Cancel') . '">';
-} elseif ($permissionToWrite) {
-    print '<a class="editfielda" href="' . dol_escape_htmltag($url_page_current . '?id=' . $object->id . '&action=editmessage&token=' . newToken()) . '">' . img_edit($langs->trans('Modify'), 0) . '</a>';
-}
-print '</span>';
 print '</div></td></tr>';
 print '<tr><td colspan="2">';
 if ($action === 'editmessage' && $permissionToWrite) {
     require_once DOL_DOCUMENT_ROOT . '/core/class/doleditor.class.php';
     $doleditor = new DolEditor('message', $object->message, '', 120, 'dolibarr_details', 'In', false, true, getDolGlobalString('FCKEDITOR_ENABLE_TICKET'), ROWS_9, '95%');
     $doleditor->Create();
+    print '<br>';
+    print '<input type="submit" class="button button-edit smallpaddingimp" value="' . $langs->trans('Modify') . '"> ';
+    print '<input type="submit" class="button button-cancel smallpaddingimp" name="cancel" value="' . $langs->trans('Cancel') . '">';
 } else {
+    $msgClass = $permissionToWrite ? ' class="dtc-message-value wpeo-tooltip-event edit-message-on-click" title="' . dol_escape_htmltag($langs->trans('Modify')) . '" style="cursor:pointer;" data-edit-url="' . dol_escape_htmltag($url_page_current . '?id=' . $object->id . '&action=editmessage&token=' . newToken()) . '"' : '';
+    print '<div' . $msgClass . '>';
     print !empty($object->message) ? dol_htmlentitiesbr($object->message) : '<span class="opacitymedium">' . $langs->trans('None') . '</span>';
+    print '</div>';
 }
 print '</td></tr>';
 print '</tbody></table>';
@@ -321,43 +681,93 @@ $regCondition = (string) ($extra['digiriskdolibarr_condition_message'] ?? '');
 $regServiceRaw  = $extra['digiriskdolibarr_ticket_service'] ?? '';
 $firstServiceId = (int) (is_string($regServiceRaw) ? strtok($regServiceRaw, ',') : $regServiceRaw);
 $regService     = '';
-if ($firstServiceId > 0 && file_exists(DOL_DOCUMENT_ROOT . '/custom/digiriskdolibarr/class/digiriskelement.class.php')) {
+if (file_exists(DOL_DOCUMENT_ROOT . '/custom/digiriskdolibarr/class/digiriskelement.class.php')) {
     require_once DOL_DOCUMENT_ROOT . '/custom/digiriskdolibarr/class/digiriskelement.class.php';
-    $digiriskElement = new DigiriskElement($db);
-    if ($digiriskElement->fetch($firstServiceId) > 0) {
-        $regService = $digiriskElement->getNomUrl(1, '', 0, '', -1, 1);
+    if ($firstServiceId > 0) {
+        $digiriskElement = new DigiriskElement($db);
+        if ($digiriskElement->fetch($firstServiceId) > 0) {
+            $regService = $digiriskElement->getNomUrl(1, '', 0, '', -1, 1);
+        }
     }
 }
 
-// A warning icon flags an unfilled registre field, mirroring the target design.
-$regWarn = static function (string $value) use ($langs): string {
-    return $value === '' ? img_warning($langs->trans('None')) . ' ' : '';
+// Helper to render an inline editable field
+$renderInlineEditable = static function (string $field, string $type, string $val, string $placeholder, string $rawVal = '', array $options = []) use ($langs, $permissionToWrite, $url_page_current, $object): string {
+    if (!$permissionToWrite) {
+        return $val === '' ? '<span class="opacitymedium">' . dol_escape_htmltag($placeholder) . '</span>' : $val;
+    }
+    $isEmpty = ($val === '');
+    $displayVal = $isEmpty ? dol_escape_htmltag($placeholder) : $val;
+    $rawValAttr = ' data-raw="' . dol_escape_htmltag($rawVal === '' && $type !== 'select' ? $val : $rawVal) . '"';
+    $tabAttr = '';
+    if (isset($options['tabindex'])) {
+        $tabAttr = ' tabindex="' . (int)$options['tabindex'] . '"';
+        unset($options['tabindex']);
+    }
+    $optionsAttr = !empty($options) ? ' data-options="' . dol_escape_htmltag(json_encode($options)) . '"' : '';
+    $classes = 'dtc-extrafield-value dtc-inline-editable' . ($isEmpty ? ' is-empty' : '');
+    
+    return '<span class="' . $classes . '"' . $tabAttr . ' title="' . dol_escape_htmltag($langs->trans('Modify')) . '" data-placeholder="' . dol_escape_htmltag($placeholder) . '" data-field="' . dol_escape_htmltag($field) . '" data-type="' . dol_escape_htmltag($type) . '" data-ticket-id="' . (int) $object->id . '" data-url="' . dol_escape_htmltag($url_page_current) . '"' . $rawValAttr . $optionsAttr . '>' . $displayVal . '</span>';
 };
 
-print '<table class="border centpercent tableforfield"><tbody>';
+$drPicto = img_picto('', 'digiriskdolibarr_color@digiriskdolibarr', 'class="pictoModule" style="margin-right: 5px;"');
+
+// Fetch all GP/UT options for select
+$serviceOptions = ['' => '']; // Empty option
+if (file_exists(DOL_DOCUMENT_ROOT . '/custom/digiriskdolibarr/class/digiriskelement.class.php')) {
+    require_once DOL_DOCUMENT_ROOT . '/custom/digiriskdolibarr/class/digiriskelement.class.php';
+    $digiriskElementTmp = new DigiriskElement($db);
+    $elementList = $digiriskElementTmp->fetchDigiriskElementFlat(0);
+    if (is_array($elementList)) {
+        foreach ($elementList as $el) {
+            $obj = $el['object'] ?? null;
+            if ($obj && isset($obj->id)) {
+                $depth = (int)($el['depth'] ?? 0);
+                $indent = str_repeat('&nbsp;&nbsp;&nbsp;&nbsp;', $depth);
+                $serviceOptions[$obj->id] = $indent . dol_escape_htmltag($obj->ref . ' - ' . $obj->label);
+            }
+        }
+    }
+}
+
+// Build the direct select HTML for GP/UT
+$serviceSelectHtml = '';
+if (!$permissionToWrite) {
+    $serviceSelectHtml = $regService !== '' ? $regService : '<span class="opacitymedium">' . $langs->trans('None') . '</span>';
+} else {
+    $serviceSelectHtml = '<select class="dtc-direct-select flat" data-field="digiriskdolibarr_ticket_service" tabindex="5" style="width: 100%; max-width: 200px;">';
+    foreach ($serviceOptions as $optVal => $optText) {
+        $selected = ((string)$optVal === (string)$firstServiceId) ? ' selected="selected"' : '';
+        // optText is already escaped and contains HTML (&nbsp;), so we don't escape it here
+        $serviceSelectHtml .= '<option value="' . dol_escape_htmltag((string)$optVal) . '"' . $selected . '>' . $optText . '</option>';
+    }
+    $serviceSelectHtml .= '</select>';
+}
+
+print '<table class="border centpercent tableforfield dtc-registres-table"><tbody>';
 print '<tr class="liste_titre trforfield"><td colspan="4"><div class="dtc-head">' . img_picto('', 'digiriskdolibarr_color@digiriskdolibarr', 'class="pictoModule"') . ' ' . $langs->trans('TicketActionCardRegistresSection') . '</div></td></tr>';
 
 print '<tr>';
-print '<td class="titlefieldmiddle">' . $regWarn($regLastname) . $langs->trans('LastName') . '</td><td>' . dol_escape_htmltag($regLastname) . '</td>';
-print '<td class="titlefieldmiddle">' . $regWarn($regFirstname) . $langs->trans('FirstName') . '</td><td>' . dol_escape_htmltag($regFirstname) . '</td>';
+print '<td class="titlefieldmiddle">' . $drPicto . $langs->trans('LastName') . '</td><td>' . $renderInlineEditable('digiriskdolibarr_ticket_lastname', 'text', dol_escape_htmltag($regLastname), $langs->trans('LastName'), '', ['tabindex' => 3]) . '</td>';
+print '<td class="titlefieldmiddle">' . $drPicto . $langs->trans('FirstName') . '</td><td>' . $renderInlineEditable('digiriskdolibarr_ticket_firstname', 'text', dol_escape_htmltag($regFirstname), $langs->trans('FirstName'), '', ['tabindex' => 7]) . '</td>';
 print '</tr>';
 
 print '<tr>';
-print '<td class="titlefieldmiddle">' . $regWarn($regPhone) . $langs->trans('Phone') . '</td><td>' . dol_print_phone($regPhone) . '</td>';
-print '<td class="titlefieldmiddle">' . $regWarn($regDate) . $langs->trans('DeclarationDate') . '</td><td>' . $regDate . '</td>';
+print '<td class="titlefieldmiddle">' . $drPicto . $langs->trans('Phone') . '</td><td>' . $renderInlineEditable('digiriskdolibarr_ticket_phone', 'text', dol_print_phone($regPhone), $langs->trans('Phone'), $regPhone, ['tabindex' => 4]) . '</td>';
+print '<td class="titlefieldmiddle">' . $drPicto . $langs->trans('DeclarationDate') . '</td><td>' . $renderInlineEditable('digiriskdolibarr_ticket_date', 'date', $regDate, $langs->trans('DeclarationDate'), (string)$regDateRaw, ['tabindex' => 8]) . '</td>';
 print '</tr>';
 
 print '<tr>';
-print '<td class="titlefieldmiddle">' . $regWarn($regService) . $langs->trans('GP/UT') . '</td><td>' . $regService . '</td>';
-print '<td class="titlefieldmiddle">' . $regWarn($regLocation) . $langs->trans('Location') . '</td><td>' . dol_escape_htmltag($regLocation) . '</td>';
+print '<td class="titlefieldmiddle">' . $drPicto . $langs->trans('GP/UT') . '</td><td>' . $serviceSelectHtml . '</td>';
+print '<td class="titlefieldmiddle">' . $drPicto . $langs->trans('Location') . '</td><td>' . $renderInlineEditable('digiriskdolibarr_ticket_location', 'text', dol_escape_htmltag($regLocation), $langs->trans('Location'), '', ['tabindex' => 9]) . '</td>';
 print '</tr>';
 
-print '<tr><td class="titlefieldmiddle">' . $langs->trans('ConditionMessage') . '</td><td colspan="3">' . ($regCondition !== '' ? dolPrintHTML($regCondition) : '<span class="opacitymedium">' . $langs->trans('None') . '</span>') . '</td></tr>';
+print '<tr><td class="titlefieldmiddle">' . $drPicto . $langs->trans('Condition') . '</td><td colspan="3">' . $renderInlineEditable('digiriskdolibarr_condition_message', 'textarea', ($regCondition !== '' ? dolPrintHTML($regCondition) : ''), $langs->trans('ConditionMessage'), $regCondition, ['tabindex' => 6]) . '</td></tr>';
 
 // "Registre signé": disabled indicator. TODO (#4443 step 2): reflect real SaturneSignature state
 // and add the "Conditions à accepter pour la signature" (ValidateText) + category-scoped
 // "Date de départ anticipé" rows (see actions_digiriskdolibarr.class.php printCommonFooter:324-337 / 291-310).
-print '<tr><td class="titlefieldmiddle">' . $langs->trans('RegisterSigned') . '</td><td colspan="3"><input type="checkbox" disabled></td></tr>';
+print '<tr><td class="titlefieldmiddle">' . $drPicto . $langs->trans('RegisterSigned') . '</td><td colspan="3"><input type="checkbox" disabled></td></tr>';
 
 print '</tbody></table>';
 
@@ -386,6 +796,17 @@ if (!empty($linkedAccidents)) {
 print '</td></tr>';
 print '</tbody></table>';
 
+// ---- Attached files box (native Dolibarr showdocuments widget: generate + list + preview + delete), same as the native ticket card ----
+require_once DOL_DOCUMENT_ROOT . '/core/class/html.formfile.class.php';
+$formfileTicket  = new FormFile($db);
+$ticketFilesName = dol_sanitizeFileName($object->ref);
+$ticketFilesDir  = $conf->ticket->dir_output . '/' . $ticketFilesName;
+$genallowed      = $permissionToWrite ? 1 : 0;
+$delallowed      = $permissionToWrite ? 1 : 0;
+print '<div class="dtc-files-box">';
+print $formfileTicket->showdocuments('ticket', $ticketFilesName, $ticketFilesDir, $url_page_current . '?id=' . $object->id, $genallowed, $delallowed, $object->model_pdf, 1, 0, 0, 28, 0, '', '', '', '');
+print '</div>';
+
 print '</div>'; // fichehalfleft
 
 /*
@@ -393,6 +814,22 @@ print '</div>'; // fichehalfleft
  */
 print '<div class="fichehalfright">';
 print '<div class="underbanner clearboth"></div>';
+
+// ---- Prepare parent task info ----
+$parentRef = 'TKP-' . $object->ref;
+$parentTaskId = 0;
+$parentTask = null;
+if (!empty($object->fk_project) && isModEnabled('project')) {
+    require_once DOL_DOCUMENT_ROOT . '/projet/class/task.class.php';
+    $sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "projet_task WHERE ref = '" . $db->escape($parentRef) . "' AND fk_projet = " . (int) $object->fk_project;
+    $resql = $db->query($sql);
+    if ($resql && $db->num_rows($resql) > 0) {
+        $objTask = $db->fetch_object($resql);
+        $parentTaskId = $objTask->rowid;
+        $parentTask = new Task($db);
+        $parentTask->fetch($parentTaskId);
+    }
+}
 
 // ---- Responsable et avancement ----
 print '<table class="border centpercent tableforfield"><tbody>';
@@ -417,30 +854,86 @@ if ($permissionToWrite) {
 }
 print '</td></tr>';
 
-// Progression (inline, on-the-fly editable — contenteditable, click to edit)
+// Progression (inline editable — modifying PARENT TASK if it exists)
 print '<tr><td class="titlefieldmiddle">' . $langs->trans('Progression') . '</td>';
-print '<td class="dtc-progress" data-ticket-id="' . (int) $object->id . '" data-progress-url="' . dol_escape_htmltag($url_page_current) . '" data-value="' . (int) $object->progress . '">';
-print '<span class="dtc-progress-value' . ($permissionToWrite ? ' dtc-editable' : '') . '"' . ($permissionToWrite ? ' contenteditable="true"' : '') . '>' . ((int) $object->progress) . '</span> %';
-print '</td></tr>';
+if ($parentTask) {
+    print '<td class="dtc-progress" data-ticket-id="' . (int) $parentTask->id . '" data-action="set_task_progress_ajax" data-progress-url="' . dol_escape_htmltag($url_page_current) . '" data-value="' . (int) $parentTask->progress . '">';
+    print '<span class="dtc-progress-value' . ($permissionToWrite ? ' dtc-editable' : '') . '"' . ($permissionToWrite ? ' contenteditable="true"' : '') . '>' . ((int) $parentTask->progress) . '</span> %';
+    print '</td></tr>';
+} else {
+    print '<td><span class="opacitymedium">0 %</span></td></tr>';
+}
 print '</tbody></table>';
 
-// ---- Linked tasks table (STRUCTURE ONLY — data wiring is step 2) ----
-// TODO (#4443 step 2): populate rows from the tasks linked to this ticket.
-//   $task->getTasksArray(null, null, $object->fk_project, 0, 0, '', '-1', '', 0, 0, $extrafields);
-//   then render each row with projectLinesa() (native progress bar / resources).
-//   Refs: projet/tasks.php:956/1216, core/lib/project.lib.php:600,
-//   actions_digiriskdolibarr.class.php:523 (TotalProgress pattern).
+// ---- Linked tasks table (data wired for #4881) ----
 print '<div class="div-table-responsive-no-min">';
 print '<table class="noborder centpercent">';
 print '<tr class="liste_titre">';
-print '<th>' . $langs->trans('RefTask') . '</th>';
+// Add actions to header
+$tasksHeaderActions = '';
+if (!empty($object->fk_project) && $permissionToWrite) {
+    if ($parentTask) {
+        $tasksHeaderActions .= '<span style="margin-left:5px;">' . $parentTask->getNomUrl(2) . '</span>';
+        $tasksHeaderActions .= '<a style="margin-left:5px; cursor:pointer;" class="modal-open wpeo-tooltip-event" title="' . dol_escape_htmltag($langs->trans('NewTask')) . '"><input type="hidden" class="modal-options" data-modal-to-open="ticket_task_add_modal" />' . img_picto('', 'plus') . '</a>';
+    } else {
+        $tasksHeaderActions .= '<a style="margin-left:5px" href="' . dol_buildpath('/custom/digiriskdolibarr/view/ticket/ticket_card.php', 1) . '?id=' . $object->id . '&action=create_parent_task" title="' . dol_escape_htmltag($langs->trans('Add')) . '">' . img_picto('', 'plus') . '</a>';
+    }
+}
+print '<th>' . $langs->trans('RefTask') . $tasksHeaderActions . '</th>';
 print '<th>' . $langs->trans('Label') . '</th>';
 print '<th class="center">' . $langs->trans('DateStart') . '</th>';
 print '<th class="center">' . $langs->trans('Deadline') . '</th>';
 print '<th class="center">' . $langs->trans('Progress') . '</th>';
 print '<th class="right">' . $langs->trans('Resp') . '</th>';
 print '</tr>';
-print '<tr class="oddeven"><td colspan="6" class="opacitymedium center">' . $langs->trans('NoRecordFound') . '</td></tr>';
+
+$tasksarray = [];
+if ($parentTask) {
+    $taskObj = new Task($db);
+    $extrafieldsObj = new ExtraFields($db);
+    $allTasks = $taskObj->getTasksArray(null, null, $object->fk_project, 0, 0, '', '-1', '', 0, 0, $extrafieldsObj);
+    if (!empty($allTasks)) {
+        foreach ($allTasks as $tsk) {
+            if ($tsk->fk_task_parent == $parentTaskId) {
+                $tasksarray[] = $tsk;
+            }
+        }
+    }
+}
+
+if (!empty($tasksarray)) {
+    foreach ($tasksarray as $t) {
+        print '<tr class="oddeven">';
+        print '<td>' . $t->getNomUrl(1, 'withproject') . '</td>';
+        print '<td>' . dol_escape_htmltag($t->label) . '</td>';
+        print '<td class="center">' . dol_print_date($t->date_start, 'day') . '</td>';
+        print '<td class="center">' . dol_print_date($t->date_end, 'day') . '</td>';
+        
+        // Progress inline editable (using dynamic data-action added to JS)
+        print '<td class="center dtc-progress" data-ticket-id="' . (int) $t->id . '" data-action="set_task_progress_ajax" data-progress-url="' . dol_escape_htmltag($url_page_current) . '" data-value="' . (int) $t->progress . '">';
+        print '<span class="dtc-progress-value' . ($permissionToWrite ? ' dtc-editable' : '') . '"' . ($permissionToWrite ? ' contenteditable="true"' : '') . '>' . ((int) $t->progress) . '</span> %';
+        print '</td>';
+        
+        // Responsable (display names/avatars)
+        print '<td class="right">';
+        $contacts = $t->getListContactId('internal');
+        if (!empty($contacts)) {
+            $userstat = new User($db);
+            foreach ($contacts as $contactId) {
+                if ($userstat->fetch($contactId) > 0) {
+                    print $userstat->getNomUrl(-2, '', 0, 0, 24, 0, 'paddingright') . ' ';
+                }
+            }
+        } else {
+            print '<span class="opacitymedium">' . $langs->trans('NotAssigned') . '</span>';
+        }
+        print '</td>';
+        print '</tr>';
+    }
+} else {
+    print '<tr class="oddeven"><td colspan="6" class="opacitymedium center">' . $langs->trans('NoRecordFound') . '</td></tr>';
+}
+
 print '</table>';
 print '</div>';
 
@@ -534,9 +1027,269 @@ $formactions->showactions($object, 'ticket', 0, 1, 'listactions', 5);
 print '</div>'; // fichehalfright
 print '</div>'; // fichecenter
 
+/*
+ * Conversation (full-width) — ticket conversation system.
+ * Timeline = synthetic initial (from $object->message) + all ticket actioncomm rows
+ * (TICKET_MSG* = message cards, others = discrete event lines), oldest first.
+ */
+$threadItems = [];
+if (!empty($object->message)) {
+    $init = new stdClass();
+    $init->kind = 'message';
+    $init->id   = 0;
+    $init->type = 'initial';
+    $init->mine = false;
+    if ($object->fk_user_create > 0) {
+        $creatorUser = new User($db);
+        $creatorUser->fetch($object->fk_user_create);
+        $init->author   = $creatorUser->getFullName($langs) ?: ($creatorUser->login ?: $langs->trans('Unknown'));
+        $init->av_uid   = $creatorUser->id;
+        $init->av_first = $creatorUser->firstname;
+        $init->av_last  = $creatorUser->lastname;
+        $init->av_login = $creatorUser->login;
+        $init->av_photo = $creatorUser->photo;
+    } else {
+        $init->author = $langs->trans('Unknown');
+        $init->av_uid = 0;
+        $init->av_first = $init->av_last = $init->av_login = $init->av_photo = '';
+    }
+    $init->ts        = (int) $object->datec;
+    $init->subject   = '';
+    $init->body_html = dolPrintHTML((string) $object->message);
+    $init->sent_mail = false;
+    $init->to        = [];
+    $init->cc        = [];
+    $threadItems[]   = $init;
+}
+$sqlThread = 'SELECT a.id, a.code, a.label, a.note as note_private, a.datep,'
+    . ' a.fk_user_author, a.email_to, a.email_tocc,'
+    . ' u.firstname, u.lastname, u.login, u.photo'
+    . ' FROM ' . MAIN_DB_PREFIX . 'actioncomm a'
+    . ' LEFT JOIN ' . MAIN_DB_PREFIX . 'user u ON u.rowid = a.fk_user_author'
+    . ' WHERE a.fk_element = ' . (int) $object->id . " AND a.elementtype = 'ticket'"
+    . ' ORDER BY a.datep ASC, a.id ASC';
+$resThread = $db->query($sqlThread);
+if ($resThread) {
+    while ($rowThread = $db->fetch_object($resThread)) {
+        if ($rowThread->code === 'AC_TICKET_CREATE') {
+            // Redundant with the synthetic initial rendered above.
+            continue;
+        }
+        $tsThread = (int) $db->jdate($rowThread->datep);
+        if (strpos((string) $rowThread->code, 'TICKET_MSG') === 0) {
+            $msgItem = new stdClass();
+            $msgItem->kind     = 'message';
+            $msgItem->id       = (int) $rowThread->id;
+            $msgItem->type     = preg_match('/PRIVATE/', (string) $rowThread->code) ? 'internal' : 'public';
+            $msgItem->mine     = ((int) $rowThread->fk_user_author === (int) $user->id);
+            $msgItem->author   = trim(((string) $rowThread->firstname) . ' ' . ((string) $rowThread->lastname)) ?: ((string) $rowThread->login ?: $langs->trans('Unknown'));
+            $msgItem->av_uid   = (int) $rowThread->fk_user_author;
+            $msgItem->av_first = $rowThread->firstname;
+            $msgItem->av_last  = $rowThread->lastname;
+            $msgItem->av_login = $rowThread->login;
+            $msgItem->av_photo = $rowThread->photo;
+            $msgItem->ts       = $tsThread;
+            $msgItem->subject  = (string) $rowThread->label;
+            $msgItem->body_html = dolPrintHTML((string) $rowThread->note_private);
+            $msgItem->sent_mail = (bool) preg_match('/SENTBYMAIL/', (string) $rowThread->code);
+            $isPublicMsg        = ($msgItem->type === 'public');
+            $msgItem->to        = ($isPublicMsg && !empty($rowThread->email_to)) ? explode(',', (string) $rowThread->email_to) : [];
+            $msgItem->cc        = ($isPublicMsg && !empty($rowThread->email_tocc)) ? explode(',', (string) $rowThread->email_tocc) : [];
+            $msgItem->mentions  = (!$isPublicMsg && !empty($rowThread->email_to)) ? explode(',', (string) $rowThread->email_to) : [];
+            $threadItems[]      = $msgItem;
+        } else {
+            $evItem = new stdClass();
+            $evItem->kind = 'event';
+            $evItem->ts   = $tsThread;
+            $evWho        = trim(((string) $rowThread->firstname) . ' ' . ((string) $rowThread->lastname)) ?: (string) $rowThread->login;
+            $evItem->text = ((string) ($rowThread->label ?: $rowThread->code)) . ($evWho !== '' ? ' · ' . $evWho : '') . ' · ' . dol_print_date($tsThread, 'dayhour', 'tzuser');
+            $threadItems[] = $evItem;
+        }
+    }
+    $db->free($resThread);
+}
+$threadMsgCount = 0;
+$threadMsgIds   = [];
+foreach ($threadItems as $threadItem) {
+    if ($threadItem->kind === 'message') {
+        $threadMsgCount++;
+        $threadItem->file_count = 0;
+        if ((int) $threadItem->id > 0) {
+            $threadMsgIds[] = (int) $threadItem->id;
+        }
+    }
+}
+if (!empty($threadMsgIds)) {
+    $resFiles = $db->query('SELECT agenda_id, COUNT(*) as nb FROM ' . MAIN_DB_PREFIX . 'ecm_files WHERE agenda_id IN (' . implode(',', $threadMsgIds) . ') GROUP BY agenda_id');
+    if ($resFiles) {
+        $fileCounts = [];
+        while ($rowFile = $db->fetch_object($resFiles)) {
+            $fileCounts[(int) $rowFile->agenda_id] = (int) $rowFile->nb;
+        }
+        $db->free($resFiles);
+        foreach ($threadItems as $threadItem) {
+            if ($threadItem->kind === 'message' && isset($fileCounts[(int) $threadItem->id])) {
+                $threadItem->file_count = $fileCounts[(int) $threadItem->id];
+            }
+        }
+    }
+}
+
+$nowConv = dol_now();
+print '<div class="dtc-conversation" data-ticket-id="' . (int) $object->id . '" data-url="' . dol_escape_htmltag($url_page_current) . '" data-lang-confirm-delete="' . dol_escape_htmltag($langs->transnoentities('ConfirmDeleteMessage')) . '">';
+print '<div class="dtc-conversation__head"><i class="fas fa-comments"></i> ' . $langs->trans('Conversation') . ' <span class="opacitymedium">(' . (int) $threadMsgCount . ')</span></div>';
+print '<ul class="dtc-thread">';
+$lastDay = '';
+foreach ($threadItems as $threadItem) {
+    $dayLabel = dol_print_date((int) $threadItem->ts, 'day', 'tzuser');
+    if ($dayLabel !== $lastDay) {
+        print '<li class="dtc-thread__daysep"><span>' . dol_escape_htmltag($dayLabel) . '</span></li>';
+        $lastDay = $dayLabel;
+    }
+    if ($threadItem->kind === 'event') {
+        print '<li class="dtc-event">' . dol_escape_htmltag($threadItem->text) . '</li>';
+    } else {
+        print digiriskdolibarr_ticket_conversation_bubble($langs, $conf, $threadItem, (int) $nowConv);
+    }
+}
+if ($threadMsgCount === 0) {
+    print '<li class="dtc-thread__empty"><i class="fas fa-comments"></i><div>' . $langs->trans('NoMessageYet') . '</div><div class="opacitymedium">' . $langs->trans('BeFirstToReply') . '</div></li>';
+}
+print '</ul>';
+// Composer — note interne (public recipients/attachments/mentions added in later tasks).
+if ($permissionToWrite) {
+    require_once DOL_DOCUMENT_ROOT . '/core/class/doleditor.class.php';
+    // Preloaded recipient suggestions (external ticket contacts + thirdparty email).
+    $convSuggestions = [];
+    $object->fetch_thirdparty();
+    $convExtContacts = $object->liste_contact(-1, 'external');
+    if (is_array($convExtContacts)) {
+        foreach ($convExtContacts as $convContact) {
+            $convEmail = (string) ($convContact['email'] ?? '');
+            if ($convEmail !== '') {
+                $convName = trim(((string) ($convContact['firstname'] ?? '')) . ' ' . ((string) ($convContact['lastname'] ?? ''))) ?: $convEmail;
+                $convSuggestions[$convEmail] = $convName . ' <' . $convEmail . '>';
+            }
+        }
+    }
+    if (is_object($object->thirdparty) && !empty($object->thirdparty->email)) {
+        $convSuggestions[$object->thirdparty->email] = $object->thirdparty->name . ' <' . $object->thirdparty->email . '>';
+    }
+    // Available ticket_send email templates.
+    $convTemplates = [];
+    $resConvTpl = $db->query("SELECT rowid, label FROM " . MAIN_DB_PREFIX . "c_email_templates WHERE type_template = 'ticket_send' AND active = 1 AND entity IN (" . getEntity('c_email_templates') . ") ORDER BY label");
+    if ($resConvTpl) {
+        while ($objConvTpl = $db->fetch_object($resConvTpl)) {
+            $convTemplates[(int) $objConvTpl->rowid] = $objConvTpl->label;
+        }
+        $db->free($resConvTpl);
+    }
+    // Internal agents for @mentions.
+    $convAgents = [];
+    $resConvAg = $db->query('SELECT rowid, firstname, lastname, login FROM ' . MAIN_DB_PREFIX . 'user WHERE statut = 1 AND entity IN (' . getEntity('user') . ') ORDER BY lastname, firstname');
+    if ($resConvAg) {
+        while ($objConvAg = $db->fetch_object($resConvAg)) {
+            $convAgents[(int) $objConvAg->rowid] = trim(((string) $objConvAg->firstname) . ' ' . ((string) $objConvAg->lastname)) ?: (string) $objConvAg->login;
+        }
+        $db->free($resConvAg);
+    }
+    print '<form class="dtc-composer dtc-composer--internal" data-mode="internal" data-lang-savenote="' . dol_escape_htmltag($langs->transnoentities('SaveNote')) . '" data-lang-send="' . dol_escape_htmltag($langs->transnoentities('Send')) . '">';
+    print '<div class="dtc-composer__switch">';
+    print '<button type="button" class="dtc-composer__tab is-active" data-mode="internal"><i class="fas fa-lock"></i> ' . $langs->trans('PrivateMessage') . '</button>';
+    print '<button type="button" class="dtc-composer__tab" data-mode="public"><i class="fas fa-share"></i> ' . $langs->trans('PublicMessage') . '</button>';
+    print '</div>';
+    print '<div class="dtc-composer__public" style="display:none;">';
+    print '<datalist id="dtc_recipient_suggestions">';
+    foreach ($convSuggestions as $convEmail => $convLabel) {
+        print '<option value="' . dol_escape_htmltag($convEmail) . '">' . dol_escape_htmltag($convLabel) . '</option>';
+    }
+    print '</datalist>';
+    print '<div class="dtc-recipients" data-target="to"><span class="dtc-recipients__label">' . $langs->trans('ConvTo') . '</span><span class="dtc-chips"></span><input type="text" class="dtc-chip-input" list="dtc_recipient_suggestions" placeholder="' . dol_escape_htmltag($langs->trans('AddRecipient')) . '"></div>';
+    print '<div class="dtc-recipients" data-target="cc"><span class="dtc-recipients__label">' . $langs->trans('ConvCc') . '</span><span class="dtc-chips"></span><input type="text" class="dtc-chip-input" list="dtc_recipient_suggestions" placeholder="Cc"></div>';
+    print '<input type="text" class="dtc-composer__subject" name="subject" placeholder="' . dol_escape_htmltag($langs->trans('Subject')) . '" value="' . dol_escape_htmltag('Re: ' . (string) $object->subject . ' — ' . (string) $object->ref) . '">';
+    if (!empty($convTemplates)) {
+        print '<select class="dtc-model-select" name="model_id"><option value="0">' . dol_escape_htmltag($langs->trans('EMailTemplates')) . '…</option>';
+        foreach ($convTemplates as $convTplId => $convTplLabel) {
+            print '<option value="' . (int) $convTplId . '">' . dol_escape_htmltag($convTplLabel) . '</option>';
+        }
+        print '</select>';
+    }
+    print '</div>';
+    print '<div class="dtc-composer__mentions">';
+    print '<span class="dtc-recipients__label" title="' . dol_escape_htmltag($langs->trans('MentionAgents')) . '"><i class="fas fa-at"></i></span>';
+    print $form->multiselectarray('dtc_mentions', $convAgents, [], 0, 0, 'dtc-mention-select', 0, 0, '', '', $langs->trans('MentionAgents'));
+    print '</div>';
+    print '<div class="dtc-composer__editor">';
+    $convEditor = new DolEditor('dtc_body', '', '', 140, 'dolibarr_notes', 'In', false, true, getDolGlobalString('FCKEDITOR_ENABLE_TICKET'), ROWS_4, '100%');
+    $convEditor->Create();
+    print '</div>';
+    print '<div class="dtc-composer__attach">';
+    print '<input type="file" class="dtc-file-input" multiple style="display:none;">';
+    print '<button type="button" class="dtc-attach-btn"><i class="fas fa-paperclip"></i> ' . $langs->trans('AddFile') . '</button>';
+    print '<span class="dtc-file-list"></span>';
+    print '</div>';
+    print '<div class="dtc-composer__foot">';
+    print '<button type="button" class="dtc-composer__send" data-thread-send><i class="fas fa-paper-plane"></i> <span class="dtc-composer__send-label">' . $langs->trans('SaveNote') . '</span></button>';
+    print '<span class="opacitymedium dtc-composer__hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>';
+    print '</div>';
+    print '</form>';
+}
+print '</div>';
+
 print dol_get_fiche_end();
 
 print '</div>'; // digirisk-ticket-card
+
+// --- Modal Add Child Task (#4881) ---
+if (!empty($object->fk_project) && $permissionToWrite && $parentTask) {
+    print '<div class="wpeo-modal modal-task" id="ticket_task_add_modal">';
+    print '<div class="modal-container wpeo-modal-event">';
+    print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '?id=' . $object->id . '">';
+    print '<input type="hidden" name="token" value="' . newToken() . '">';
+    print '<input type="hidden" name="action" value="add_child_task_modal">';
+    print '<input type="hidden" name="task_parent" value="' . $parentTask->id . '">';
+    print '<div class="modal-header">';
+    print '<h2 class="modal-title">' . $langs->trans('NewTask') . '</h2>';
+    print '<div class="modal-close"><i class="fas fa-times"></i></div>';
+    print '</div>';
+    print '<div class="modal-content">';
+    print '<div class="riskassessment-task-container">';
+    print '<div class="riskassessment-task">';
+    print '<div class="wpeo-gridlayout flex flex-row items-center">';
+    print '<i class="fas fa-paragraph" style="margin-right:1em;"></i>';
+    print '<input type="text" class="riskassessment-task-label" name="label" required="required" placeholder="' . dol_escape_htmltag($langs->trans('Label')) . '">';
+    print '</div>';
+    print '<div class="riskassessment-task-date wpeo-gridlayout grid-3" style="margin-top: 1em; margin-bottom: 1em;">';
+    print '<div class="flex flex-row items-center">';
+    print '<i class="fas fa-calendar-day" style="margin-right: 1em;"></i>';
+    print '<input type="datetime-local" name="date_start_local" required>';
+    print '</div>';
+    print '<div class="flex flex-row items-center">';
+    print '<i class="fas fa-calendar-check" style="margin-right: 1em;"></i>';
+    print '<input type="datetime-local" name="date_end_local">';
+    print '</div>';
+    print '<div class="flex flex-row items-center paddingright">';
+    print '<i class="fas fa-euro-sign" style="margin-right: 1em;"></i>';
+    print '<input type="number" step="0.01" class="riskassessment-task-budget" name="budget" placeholder="Budget">';
+    print '</div>';
+    print '</div>';
+    print '<div>';
+    print '<div class="flex flex-row items-center justify-center">';
+    print '<i class="fas fa-user-tie" style="margin-right: 1em;"></i>';
+    print $form->select_dolusers(0, 'user_id', 1, null, 0, '', 0, '', 0, 'minwidth200');
+    print '</div>';
+    print '</div>';
+    print '</div>';
+    print '</div>';
+    print '</div>';
+    print '<div class="modal-footer">';
+    print '<button type="submit" class="wpeo-button button-blue" style="color: #fff"><i class="fas fa-plus"></i></button>';
+    print '</div>';
+    print '</form>';
+    print '</div>';
+    print '</div>';
+}
+// ------------------------------------
 
 llxFooter();
 $db->close();

@@ -1215,14 +1215,14 @@ window.digiriskdolibarr.ticketActionCard.onFieldClick = function(event) {
 
     var $input;
     if (type === 'text') {
-        $input = $('<input type="text" class="tac-edit-input">').val(current);
+        $input = $('<input type="text" class="tac-edit-input" autocomplete="new-password">').val(current);
     } else if (type === 'longtext') {
         // Unique id so CKEditor.replace() can target the textarea after it's inserted in the DOM.
         var taId = 'tac-longtext-' + Math.random().toString(36).slice(2, 8);
-        $input = $('<textarea class="tac-edit-textarea" rows="6">').attr('id', taId).val(current);
+        $input = $('<textarea class="tac-edit-textarea" rows="6" autocomplete="new-password">').attr('id', taId).val(current);
         $wrap.data('tac-editor-id', taId);
     } else if (type === 'number') {
-        $input = $('<input type="number" min="0" max="100" step="1" class="tac-edit-input tac-edit-input--narrow">').val(current);
+        $input = $('<input type="number" min="0" max="100" step="1" class="tac-edit-input tac-edit-input--narrow" autocomplete="new-password">').val(current);
     } else if (type === 'date') {
         // Render YYYY-MM-DD for the native picker. Source value may be a timestamp.
         var dateValue = current;
@@ -1230,7 +1230,7 @@ window.digiriskdolibarr.ticketActionCard.onFieldClick = function(event) {
             var d = new Date(parseInt(current, 10) * 1000);
             dateValue = d.toISOString().substring(0, 10);
         }
-        $input = $('<input type="date" class="tac-edit-input">').val(dateValue);
+        $input = $('<input type="date" class="tac-edit-input" autocomplete="off">').val(dateValue);
     } else if (type === 'select') {
         var options = $wrap.data('edit-options') || [];
         // Long lists (or any server-searched field) get a searchable combo; short
@@ -1304,9 +1304,13 @@ window.digiriskdolibarr.ticketActionCard.onFieldClick = function(event) {
     };
 
     if (type === 'longtext') {
-        // Init CKEditor on the textarea after it's in the DOM. Save is via the floating
-        // "Enregistrer" button injected next to the editor (blur on a CKEditor area is
-        // unreliable because the user may click any toolbar button).
+        // Inline Save / Cancel buttons — appear directly under the editor (no floating overlay)
+        var $bar = $('<div class="tac-edit-bar" style="margin-top:4px;display:flex;gap:6px;">'
+            + '<button type="button" class="tac-edit-bar__save button smallpaddingimp">Enregistrer</button>'
+            + '<button type="button" class="tac-edit-bar__cancel button button-cancel smallpaddingimp">Annuler</button>'
+            + '</div>');
+
+        // Init CKEditor on the textarea after it's in the DOM.
         if (window.CKEDITOR && $input.attr('id')) {
             try {
                 window.CKEDITOR.replace($input.attr('id'), {
@@ -1323,17 +1327,14 @@ window.digiriskdolibarr.ticketActionCard.onFieldClick = function(event) {
                 console.warn('CKEditor init failed, falling back to plain textarea:', e);
             }
         }
-        // Floating action bar for longtext (Save / Cancel) — blur would fire on every
-        // toolbar click otherwise.
-        var $bar = $('<div class="tac-edit-actions">'
-            + '<button type="button" class="tac-edit-actions__save">Enregistrer</button> '
-            + '<button type="button" class="tac-edit-actions__cancel">Annuler</button>'
-            + '</div>');
+
+        // Insert the bar after the textarea/editor
         $input.after($bar);
-        $bar.find('.tac-edit-actions__save').on('click', function(e) { e.stopPropagation(); commit(); });
-        $bar.find('.tac-edit-actions__cancel').on('click', function(e) { e.stopPropagation(); cancel(); });
+        $bar.find('.tac-edit-bar__save').on('click', function(e) { e.stopPropagation(); commit(); });
+        $bar.find('.tac-edit-bar__cancel').on('click', function(e) { e.stopPropagation(); cancel(); });
         $wrap.data('tac-edit-bar', $bar);
-        // Keep Escape support too.
+
+        // Escape to cancel
         $(document).on('keydown.tac-longtext-' + ($input.attr('id') || ''), function(e) {
             if (e.key === 'Escape') { cancel(); }
         });

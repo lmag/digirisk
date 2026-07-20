@@ -97,9 +97,20 @@ window.digiriskdolibarr.ticket.event = function() {
   $(document).on( 'click',   '.digirisk-ticket-card .dtc-assignee-value', window.digiriskdolibarr.ticket.editAssigneeInline);
   $(document).on( 'change',  '.digirisk-ticket-card .dtc-assignee-select', window.digiriskdolibarr.ticket.saveAssigneeInline);
   $(document).on( 'blur',    '.digirisk-ticket-card .dtc-assignee-select', window.digiriskdolibarr.ticket.closeAssigneeInline);
+  $(document).on( 'click',   '.digirisk-ticket-card .dtc-thirdparty-name.dtc-inline-edit', window.digiriskdolibarr.ticket.editThirdpartyInline);
+  $(document).on( 'click',   '.digirisk-ticket-card .dtc-project-name.dtc-inline-edit',    window.digiriskdolibarr.ticket.editProjectInline);
   $(document).on( 'focus',   '.digirisk-ticket-card .dtc-progress-value[contenteditable]', window.digiriskdolibarr.ticket.progressFocus);
   $(document).on( 'keydown', '.digirisk-ticket-card .dtc-progress-value[contenteditable]', window.digiriskdolibarr.ticket.progressKeydown);
   $(document).on( 'blur',    '.digirisk-ticket-card .dtc-progress-value[contenteditable]', window.digiriskdolibarr.ticket.saveProgressInline);
+  $(document).on( 'click',   '.edit-message-on-click', function() { window.location.href = $(this).data('edit-url'); });
+  $(document).on( 'click',   '.digirisk-ticket-card .dtc-extrafield-value', window.digiriskdolibarr.ticket.editExtrafieldInline);
+  // Keyboard navigation: Enter/Space on a tabbable extrafield span triggers inline edit
+  $(document).on( 'keydown', '.digirisk-ticket-card .dtc-extrafield-value[tabindex]', function(e) {
+    if (e.key === 'Enter' || e.key === ' ' || e.keyCode === 13 || e.keyCode === 32) {
+      e.preventDefault();
+      $(this).trigger('click');
+    }
+  });
 
   $(document).on( 'change', '.param-table input, .param-table select, .param-table textarea', window.digiriskdolibarr.ticket.handleParamChange);
   // CKEDITOR is only loaded on pages with a rich-text editor. Guard the global
@@ -386,7 +397,7 @@ window.digiriskdolibarr.ticket.editSubjectInline = function(event) {
     return;
   }
   var current = String($wrap.attr('data-value') || '');
-  var $input  = $('<input type="text" class="dtc-subject-input" />').val(current);
+  var $input  = $('<input type="text" class="dtc-subject-input" autocomplete="new-password" />').val(current);
   $wrap.html($input);
   $input.trigger('focus').trigger('select');
 };
@@ -636,6 +647,204 @@ window.digiriskdolibarr.ticket.closeAssigneeInline = function() {
 };
 
 /**
+ * Ticket card — init (or re-open) the select2 of an inline badge editor.
+ * The plain <select> is select2-ified on first reveal so the dropdown is searchable;
+ * width is forced because it was built inside a display:none wrapper.
+ *
+ * @since   23.0.0
+ * @version 23.0.0
+ *
+ * @param  {jQuery} $sel The <select> element to enhance.
+ * @return {void}
+ */
+window.digiriskdolibarr.ticket.initInlineSelect2 = function($sel) {
+  if (!$.fn.select2) {
+    $sel.trigger('focus');
+    return;
+  }
+  if (!$sel.hasClass('select2-hidden-accessible')) {
+    $sel.select2({ width: '240px', dropdownAutoWidth: true, dropdownParent: $(document.body) });
+  } else {
+    var $container = $sel.next('.select2-container');
+    if ($container.length) {
+      $container.css('width', '240px');
+    }
+  }
+  $sel.select2('open');
+};
+
+/**
+ * Ticket card — flash a badge value green after a successful inline save.
+ *
+ * @since   23.0.0
+ * @version 23.0.0
+ *
+ * @param  {jQuery} $el Element to flash.
+ * @return {void}
+ */
+window.digiriskdolibarr.ticket.flashInline = function($el) {
+  $el.css('color', '#2ecc71');
+  window.setTimeout(function() { $el.css('color', ''); }, 1200);
+};
+
+/**
+ * Ticket card — reveal a badge inline editor (hide the name, show the searchable select),
+ * wire the save on change and the revert on close-without-change.
+ *
+ * @since   23.0.0
+ * @version 23.0.0
+ *
+ * @param  {jQuery}   $cell     The badge wrapper (.dtc-thirdparty / .dtc-project).
+ * @param  {string}   nameSel   Selector of the editable name inside the cell.
+ * @param  {string}   wrapSel   Selector of the hidden selector wrapper inside the cell.
+ * @param  {Function} saveFn    Save callback, called with ($cell, $sel).
+ * @return {void}
+ */
+window.digiriskdolibarr.ticket.revealInlineBadge = function($cell, nameSel, wrapSel, saveFn) {
+  var $name = $cell.find(nameSel);
+  var $wrap = $cell.find(wrapSel);
+  if ($wrap.is(':visible')) {
+    return;
+  }
+  $name.hide();
+  $wrap.show();
+  var $sel = $wrap.find('select');
+  window.digiriskdolibarr.ticket.initInlineSelect2($sel);
+  $sel.off('change.dtcInline').on('change.dtcInline', function() {
+    saveFn($cell, $sel);
+  });
+  $sel.off('select2:close.dtcInline').on('select2:close.dtcInline', function() {
+    window.setTimeout(function() {
+      if ($wrap.is(':visible')) {
+        $wrap.hide();
+        $name.show();
+      }
+    }, 150);
+  });
+};
+
+/**
+ * Ticket card — start editing the thirdparty badge.
+ *
+ * @since   23.0.0
+ * @version 23.0.0
+ *
+ * @param  {Object} event Click event.
+ * @return {void}
+ */
+window.digiriskdolibarr.ticket.editThirdpartyInline = function(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  window.digiriskdolibarr.ticket.revealInlineBadge($(this).closest('.dtc-thirdparty'), '.dtc-thirdparty-name', '.dtc-thirdparty-selector', window.digiriskdolibarr.ticket.saveThirdpartyInline);
+};
+
+/**
+ * Ticket card — save the thirdparty on the fly (AJAX) and rebuild the badge in place.
+ *
+ * @since   23.0.0
+ * @version 23.0.0
+ *
+ * @param  {jQuery} $cell The thirdparty badge wrapper.
+ * @param  {jQuery} $sel  The thirdparty <select>.
+ * @return {void}
+ */
+window.digiriskdolibarr.ticket.saveThirdpartyInline = function($cell, $sel) {
+  var $name = $cell.find('.dtc-thirdparty-name');
+  var $wrap = $cell.find('.dtc-thirdparty-selector');
+  var $nav  = $cell.find('.dtc-badge-nav');
+  var $hist = $cell.find('.dtc-badge-history');
+  var emptyLabel = $cell.data('empty-label') || '';
+  var socId = parseInt($sel.val(), 10);
+  if (isNaN(socId) || socId < 0) {
+    socId = 0;
+  }
+  if ($.fn.select2 && $sel.hasClass('select2-hidden-accessible')) {
+    $sel.select2('close');
+  }
+  $wrap.hide();
+  $name.show();
+  $.ajax({
+    url: $cell.data('url') + '?action=setthirdparty_ajax&id=' + $cell.data('ticket-id') + '&socid=' + socId + '&token=' + window.saturne.toolbox.getToken(),
+    type: 'POST',
+    dataType: 'json',
+    success: function(resp) {
+      if (!resp || !resp.success) {
+        return;
+      }
+      if (resp.id > 0) {
+        $name.text(resp.name).attr('href', resp.cardurl).removeClass('is-empty');
+        $nav.attr('href', resp.cardurl).show();
+        $hist.attr('href', resp.historyurl).show();
+      } else {
+        $name.text(emptyLabel).attr('href', '#').addClass('is-empty');
+        $nav.hide();
+        $hist.hide();
+      }
+      window.digiriskdolibarr.ticket.flashInline($name);
+    }
+  });
+};
+
+/**
+ * Ticket card — start editing the project badge.
+ *
+ * @since   23.0.0
+ * @version 23.0.0
+ *
+ * @param  {Object} event Click event.
+ * @return {void}
+ */
+window.digiriskdolibarr.ticket.editProjectInline = function(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  window.digiriskdolibarr.ticket.revealInlineBadge($(this).closest('.dtc-project'), '.dtc-project-name', '.dtc-project-selector', window.digiriskdolibarr.ticket.saveProjectInline);
+};
+
+/**
+ * Ticket card — save the project on the fly (AJAX) and rebuild the badge in place.
+ *
+ * @since   23.0.0
+ * @version 23.0.0
+ *
+ * @param  {jQuery} $cell The project badge wrapper.
+ * @param  {jQuery} $sel  The project <select>.
+ * @return {void}
+ */
+window.digiriskdolibarr.ticket.saveProjectInline = function($cell, $sel) {
+  var $name = $cell.find('.dtc-project-name');
+  var $wrap = $cell.find('.dtc-project-selector');
+  var $nav  = $cell.find('.dtc-badge-nav');
+  var emptyLabel = $cell.data('empty-label') || '';
+  var projectId = parseInt($sel.val(), 10);
+  if (isNaN(projectId) || projectId < 0) {
+    projectId = 0;
+  }
+  if ($.fn.select2 && $sel.hasClass('select2-hidden-accessible')) {
+    $sel.select2('close');
+  }
+  $wrap.hide();
+  $name.show();
+  $.ajax({
+    url: $cell.data('url') + '?action=setproject_ajax&id=' + $cell.data('ticket-id') + '&projectid=' + projectId + '&token=' + window.saturne.toolbox.getToken(),
+    type: 'POST',
+    dataType: 'json',
+    success: function(resp) {
+      if (!resp || !resp.success) {
+        return;
+      }
+      if (resp.id > 0) {
+        $name.text(resp.name).attr('href', resp.cardurl).removeClass('is-empty');
+        $nav.attr('href', resp.cardurl).show();
+      } else {
+        $name.text(emptyLabel).attr('href', '#').addClass('is-empty');
+        $nav.hide();
+      }
+      window.digiriskdolibarr.ticket.flashInline($name);
+    }
+  });
+};
+
+/**
  * Ticket card (#4443) — select the whole progress value when it gains focus.
  *
  * @since   23.0.0
@@ -691,8 +900,9 @@ window.digiriskdolibarr.ticket.saveProgressInline = function() {
   if (newValue === oldValue) {
     return;
   }
+  var action = $cell.data('action') || 'setprogress_ajax';
   $.ajax({
-    url: $cell.data('progress-url') + '?action=setprogress_ajax&id=' + $cell.data('ticket-id') + '&token=' + window.saturne.toolbox.getToken(),
+    url: $cell.data('progress-url') + '?action=' + action + '&id=' + $cell.data('ticket-id') + '&token=' + window.saturne.toolbox.getToken(),
     type: 'POST',
     data: { progress: newValue },
     dataType: 'json',
@@ -706,3 +916,191 @@ window.digiriskdolibarr.ticket.saveProgressInline = function() {
     }
   });
 };
+
+/**
+ * Ticket card (#4883) — inline (on-the-fly) editing for extrafields
+ *
+ * @since   23.0.0
+ * @version 23.0.0
+ *
+ * @param  {Object} event Click event.
+ * @return {void}
+ */
+window.digiriskdolibarr.ticket.editExtrafieldInline = function(event) {
+  event.preventDefault();
+  var $span = $(this);
+  if ($span.data('editing')) return;
+  $span.data('editing', true);
+
+  var type = $span.data('type') || 'text';
+  var rawValue = $span.data('raw');
+  if (typeof rawValue === 'undefined') rawValue = '';
+  var tabIdx = $span.data('tabindex') || '';
+  
+  var $input;
+  if (type === 'textarea') {
+    $input = $('<textarea class="dtc-extrafield-input" style="width:100%; min-height:80px; outline:none; transition: border-color 0.2s;" autocomplete="off"></textarea>');
+  } else if (type === 'select') {
+    $input = $('<select class="dtc-extrafield-input" style="width:100%; outline:none; transition: border-color 0.2s;"></select>');
+    var optionsObj = $span.data('options');
+    if (typeof optionsObj === 'string') {
+      try { optionsObj = JSON.parse(optionsObj); } catch(e) {}
+    }
+    if (typeof optionsObj === 'object' && optionsObj !== null) {
+      $.each(optionsObj, function(val, text) {
+        var $opt = $('<option></option>').attr('value', val).text(text);
+        if (val == rawValue) $opt.prop('selected', true);
+        $input.append($opt);
+      });
+    }
+  } else {
+    $input = $('<input type="' + type + '" class="dtc-extrafield-input" style="width:100%; outline:none; transition: border-color 0.2s;" autocomplete="off">');
+  }
+  
+  if (type !== 'select') {
+    $input.val(rawValue);
+  }
+  if (tabIdx) { $input.attr('tabindex', tabIdx); }
+  $span.hide().after($input);
+  $input.trigger('focus');
+
+  var saveFunc = function() {
+    var newValue = $input.val();
+    if (newValue === rawValue) {
+      $input.remove();
+      $span.show();
+      $span.data('editing', false);
+      return;
+    }
+    
+    var field = $span.data('field');
+    var token = window.saturne.toolbox.getToken();
+    var sep = window.saturne.toolbox.getQuerySeparator(document.URL);
+    
+    $input.prop('disabled', true);
+    // Visual feedback: green border during save
+    $input.css({'border-color': '#10b981', 'box-shadow': '0 0 0 1px #10b981'});
+    
+    $.ajax({
+      url: document.URL + sep + 'action=setextrafield_ajax&token=' + token,
+      type: 'POST',
+      data: { field: field, value: newValue },
+      dataType: 'json',
+      success: function(resp) {
+        $input.remove();
+        $span.data('raw', newValue);
+        
+        var displayValue = newValue;
+        if (type === 'select') {
+          displayValue = $input.find('option[value="' + newValue + '"]').text() || newValue;
+        }
+
+        if (type === 'textarea') {
+          $span.html(displayValue.replace(/\n/g, '<br>'));
+        } else {
+          $span.text(displayValue);
+        }
+        
+        if (newValue === '') {
+          var placeholder = $span.data('placeholder') || 'Non défini';
+          $span.html(placeholder).addClass('is-empty');
+        } else {
+          $span.removeClass('is-empty');
+        }
+        $span.show();
+        $span.data('editing', false);
+
+        // Flash green on the span after saving
+        $span.css({'border-bottom-color': '#10b981', 'color': '#10b981'});
+        setTimeout(function() {
+            $span.css({'border-bottom-color': '', 'color': ''});
+        }, 1200);
+      },
+      error: function() {
+        $input.remove();
+        $span.show();
+        $span.data('editing', false);
+        $.jnotify('Erreur lors de la sauvegarde', 'error');
+      }
+    });
+  };
+
+  if (type === 'select') {
+    $input.on('change blur', saveFunc);
+  } else {
+    $input.on('blur', saveFunc);
+    if (type !== 'textarea') {
+      $input.on('keydown', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          $input.trigger('blur');
+        }
+      });
+    }
+  }
+};
+
+// Direct select handler
+$(document).on('change', '.dtc-direct-select', function() {
+  var $select = $(this);
+  var field = $select.data('field');
+  var newValue = $select.val();
+  var token = window.saturne.toolbox.getToken();
+  var sep = window.saturne.toolbox.getQuerySeparator(document.URL);
+  
+  $select.prop('disabled', true);
+  $select.css({'border-color': '#10b981', 'box-shadow': '0 0 0 1px #10b981'});
+  
+  $.ajax({
+    url: document.URL + sep + 'action=setextrafield_ajax&token=' + token,
+    type: 'POST',
+    data: { field: field, value: newValue },
+    dataType: 'json',
+    success: function() {
+      $select.prop('disabled', false);
+      $select.css({'border-color': '#10b981', 'box-shadow': ''});
+      setTimeout(function() {
+          $select.css({'border-color': '', 'box-shadow': ''});
+      }, 1200);
+    },
+    error: function() {
+      $select.prop('disabled', false);
+      $select.css({'border-color': '', 'box-shadow': ''});
+      $.jnotify('Erreur lors de la sauvegarde', 'error');
+    }
+  });
+});
+
+
+$(function() {
+  if (!$.fn.select2) { return; }
+
+  $('.dtc-direct-select').each(function() {
+    var $sel = $(this);
+
+    // Capture the currently selected value BEFORE rebuilding with Select2
+    var selectedId = $sel.val();
+
+    // Build data array from <option> elements preserving HTML (&nbsp; indentation)
+    var data = [];
+    $sel.find('option').each(function() {
+      data.push({ id: $(this).val(), text: $(this).html() });
+    });
+
+    $sel.select2({
+      width: '100%',
+      dropdownAutoWidth: true,
+      data: data,
+      // Allow raw HTML in option text (for &nbsp; indentation)
+      escapeMarkup: function(m) { return m; },
+      templateResult: function(d) { return d.text; },
+      templateSelection: function(d) { return d.text; }
+    });
+
+    // Restore the selected value (Select2 data[] doesn't propagate the selection)
+    if (selectedId !== null && selectedId !== '') {
+      $sel.val(selectedId).trigger('change');
+    }
+  });
+});
+

@@ -136,6 +136,38 @@ $dtc-title:       #111827;
         table.nobordernopadding td.nowrap { color: $dtc-grey; font-weight: 500; }
     }
 
+    // ---- Registres table: locked 15/35/15/35% column widths via CSS (never rely on inline styles) ----
+    table.dtc-registres-table {
+        table-layout: fixed;
+        width: 100%;
+
+        > tbody > tr > td:nth-child(1),
+        > tbody > tr > td:nth-child(3) {
+            width: 15%;
+            white-space: nowrap;
+        }
+        > tbody > tr > td:nth-child(2),
+        > tbody > tr > td:nth-child(4) {
+            width: 35%;
+        }
+
+        // Value cells must clip overflowing content (long combobox etc.)
+        > tbody > tr > td:nth-child(2),
+        > tbody > tr > td:nth-child(4) {
+            overflow: hidden;
+        }
+
+        // GP/UT select and its Select2 wrapper — never exceed the column width
+        select.dtc-direct-select {
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+        .select2-container {
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+        }
+    }
+
     // Edit pencils: discreet, highlight on hover
     a.editfielda {
         color: $dtc-grey;
@@ -204,6 +236,99 @@ $dtc-title:       #111827;
         }
     }
 
+    // ---- Inline edit badges (thirdparty / project in the banner) — reedcrm-style ----
+    // Badge chrome: module logo + a dedicated navigation icon + the editable name
+    // (dashed underline, click to reveal a searchable select) + (thirdparty only) a
+    // ticket-history icon.
+    .dtc-inline-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: #f8fbff;
+        border: 1px solid $dtc-border;
+        border-radius: 6px;
+        padding: 3px 8px 3px 6px;
+        vertical-align: middle;
+        font-weight: 500;
+        font-size: 0.9em;
+        color: $dtc-grey;
+        margin: 2px 0;
+
+        a { text-decoration: none; }
+
+        .dtc-badge-logo {
+            height: 16px;
+            width: 16px;
+            object-fit: contain;
+            border-right: 1px solid $dtc-border;
+            padding-right: 6px;
+        }
+        .dtc-badge-nav,
+        .dtc-badge-history {
+            color: #64748b;
+            display: inline-flex;
+            align-items: center;
+            transition: color .15s ease;
+
+            &:hover { color: $dtc-blue; }
+        }
+        .dtc-badge-name {
+            color: $dtc-title;
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+
+            &.dtc-inline-edit {
+                cursor: pointer;
+                border-bottom: 1px dashed #cbd5e0;
+                line-height: 1;
+                padding-bottom: 1px;
+                transition: color .2s ease;
+
+                &:hover { color: $dtc-blue; }
+            }
+            &.is-empty {
+                color: #94a3b8;
+                font-style: italic;
+            }
+        }
+        .dtc-inline-selector { display: inline-flex; }
+        select.dtc-inline-select { min-width: 200px; }
+        .select2-container { vertical-align: middle; }
+    }
+
+    // ---- Inline edit (extrafields) ----
+    .dtc-inline-editable {
+        cursor: pointer;
+        border-bottom: 1px dashed #d1d5db;
+        display: inline-block;
+        transition: border-color .15s ease, color .15s ease;
+        padding-bottom: 1px;
+        min-width: 20px;
+
+        &:hover {
+            border-bottom-color: $dtc-blue;
+        }
+
+        &.is-empty {
+            font-style: italic;
+            color: #9ca3af;
+        }
+    }
+
+    .edit-message-on-click {
+        border: 1px dashed transparent;
+        padding: 4px;
+        border-radius: 4px;
+        transition: border-color .15s ease, background .15s ease;
+
+        &:hover {
+            border-color: $dtc-blue;
+            background: rgba(43, 108, 176, .05);
+        }
+    }
+
     // ---- Status action buttons (native .butAction.butStatus) → pills ----
     .navBarForStatus .butAction.butStatus {
         display: inline-flex;
@@ -231,6 +356,362 @@ $dtc-title:       #111827;
 
     // Keep list bullets tidy inside the Accidents section
     ul.nomargin { margin: 0; padding-left: 18px; }
+
+    // ---- Conversation (ticket conversation system) — V2 unified timeline ----
+    .dtc-conversation {
+        background: #fff;
+        border: 1px solid $dtc-border;
+        border-radius: $dtc-radius;
+        box-shadow: $dtc-shadow;
+        margin: 12px 0 18px;
+        overflow: hidden;
+    }
+    .dtc-conversation__head {
+        background: $dtc-bg;
+        border-bottom: 1px solid $dtc-border;
+        padding: 9px 14px;
+        font-weight: 700;
+        font-size: 0.95em;
+        color: $dtc-title;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .dtc-thread {
+        list-style: none;
+        margin: 0;
+        padding: 12px 14px;
+        max-height: 640px;
+        overflow-y: auto;
+    }
+    .dtc-thread__daysep {
+        text-align: center;
+        font-size: 0.72em;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #9aa3b0;
+        margin: 12px 0 8px;
+        position: relative;
+
+        span { background: #fff; padding: 0 10px; position: relative; z-index: 1; }
+        &:before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: $dtc-border; }
+    }
+    .dtc-event {
+        text-align: center;
+        font-size: 0.78em;
+        color: #64748b;
+        margin: 8px 0;
+    }
+    .dtc-msg {
+        display: flex;
+        gap: 10px;
+        margin: 10px 0;
+        align-items: flex-start;
+    }
+    .dtc-msg__avatar {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: $dtc-blue;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        object-fit: cover;
+        overflow: hidden;
+    }
+    .dtc-msg__card {
+        flex: 1;
+        min-width: 0;
+        border: 1px solid $dtc-border;
+        border-radius: 10px;
+        overflow: hidden;
+        background: #fff;
+    }
+    .dtc-msg__head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 6px 12px;
+        font-size: 0.85em;
+        border-bottom: 1px solid $dtc-hairline;
+    }
+    .dtc-msg__author { font-weight: 700; color: $dtc-title; }
+    .dtc-msg__type {
+        font-size: 0.92em;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .dtc-msg__time { margin-left: auto; color: #9aa3b0; font-size: 0.9em; }
+
+    .dtc-msg--initial  .dtc-msg__head { background: #e8ecfb; .dtc-msg__type { color: #3730a3; } }
+    .dtc-msg--internal .dtc-msg__head { background: #f5f0ff; .dtc-msg__type { color: #6d28d9; } }
+    .dtc-msg--public   .dtc-msg__head { background: #eef5ff; .dtc-msg__type { color: #1d4ed8; } }
+
+    .dtc-msg__to {
+        padding: 5px 12px 0;
+        font-size: 0.8em;
+        color: $dtc-grey;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        align-items: center;
+    }
+    .dtc-pill { background: #eef2f7; border-radius: 20px; padding: 1px 8px; color: #334155; }
+    .dtc-msg__mentions i { color: #b7791f; }
+    .dtc-msg__subject { padding: 5px 12px 0; font-weight: 600; color: $dtc-title; }
+    .dtc-msg__body {
+        padding: 7px 12px 9px;
+        line-height: 1.5;
+        word-break: break-word;
+
+        p:last-child { margin-bottom: 0; }
+    }
+    .dtc-msg__sent {
+        padding: 0 12px 8px;
+        font-size: 0.8em;
+        font-weight: 600;
+        color: #059669;
+    }
+    .dtc-msg__actions {
+        display: flex;
+        gap: 4px;
+        justify-content: flex-end;
+        padding: 4px 8px 6px;
+        opacity: 0;
+        transition: opacity .15s ease;
+    }
+    .dtc-msg:hover .dtc-msg__actions { opacity: 1; }
+    .dtc-msg__act {
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        color: $dtc-grey;
+        padding: 3px 6px;
+        border-radius: 5px;
+
+        &:hover { background: $dtc-bg; color: $dtc-blue; }
+        &--danger:hover { color: #dc2626; }
+    }
+    .dtc-thread__empty {
+        text-align: center;
+        color: #9aa3b0;
+        padding: 24px 12px;
+
+        i { font-size: 28px; display: block; margin-bottom: 8px; opacity: .5; }
+    }
+
+    // ---- Conversation composer ----
+    .dtc-composer {
+        border-top: 1px solid $dtc-border;
+        padding: 12px 14px;
+        transition: background .15s ease;
+
+        &.dtc-composer--internal { background: #fffdf5; }
+        &.dtc-composer--public   { background: #f7fbff; }
+    }
+    .dtc-composer__switch {
+        display: inline-flex;
+        border: 1px solid $dtc-border;
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 10px;
+    }
+    .dtc-composer__tab {
+        border: none;
+        background: #fff;
+        cursor: pointer;
+        padding: 6px 12px;
+        font-size: 0.85em;
+        font-weight: 600;
+        color: $dtc-grey;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+
+        &.is-active { color: #fff; background: $dtc-blue; }
+    }
+    .dtc-composer--internal .dtc-composer__tab.is-active { background: #b7791f; }
+    .dtc-composer__foot {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+    }
+    .dtc-composer__send {
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        padding: 7px 16px;
+        font-size: 0.9em;
+        font-weight: 600;
+        color: #fff;
+        background: $dtc-blue;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+
+        &:disabled { opacity: .6; cursor: default; }
+    }
+    .dtc-composer--internal .dtc-composer__send { background: #b7791f; }
+    .dtc-composer__hint kbd {
+        background: #eef2f7;
+        border: 1px solid $dtc-border;
+        border-radius: 4px;
+        padding: 0 4px;
+        font-size: 0.85em;
+    }
+
+    // ---- Composer: recipients (chips) + subject + template ----
+    .dtc-recipients {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 5px;
+        padding: 5px 0;
+        border-bottom: 1px solid $dtc-hairline;
+    }
+    .dtc-recipients__label {
+        color: $dtc-grey;
+        font-weight: 600;
+        font-size: 0.85em;
+        min-width: 24px;
+    }
+    .dtc-chip {
+        background: #eef2f7;
+        border: 1px solid #dbe2ea;
+        border-radius: 20px;
+        padding: 1px 4px 1px 9px;
+        font-size: 0.82em;
+        color: #334155;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+
+        button {
+            border: none;
+            background: none;
+            cursor: pointer;
+            color: #94a3b8;
+            font-size: 1.1em;
+            line-height: 1;
+            padding: 0 2px;
+
+            &:hover { color: #dc2626; }
+        }
+    }
+    .dtc-chip-input {
+        border: none;
+        outline: none;
+        background: transparent;
+        font-size: 0.85em;
+        flex: 1;
+        min-width: 120px;
+        padding: 3px;
+    }
+    .dtc-composer__subject {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid $dtc-border;
+        border-radius: 6px;
+        padding: 5px 8px;
+        margin: 8px 0 4px;
+        font-size: 0.9em;
+    }
+    .dtc-model-select {
+        border: 1px solid $dtc-border;
+        border-radius: 6px;
+        padding: 3px 6px;
+        font-size: 0.82em;
+        margin-bottom: 4px;
+    }
+
+    // ---- Composer: attachments ----
+    .dtc-composer__attach {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+    }
+    .dtc-attach-btn {
+        border: 1px dashed $dtc-border;
+        background: #fff;
+        border-radius: 6px;
+        cursor: pointer;
+        padding: 4px 10px;
+        font-size: 0.82em;
+        color: $dtc-grey;
+
+        &:hover { color: $dtc-blue; border-color: $dtc-blue; }
+    }
+    .dtc-file {
+        background: #eef2f7;
+        border-radius: 6px;
+        padding: 2px 4px 2px 8px;
+        font-size: 0.8em;
+        color: #475569;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+
+        button { border: none; background: none; cursor: pointer; color: #94a3b8; font-size: 1.1em; line-height: 1; padding: 0 2px; }
+    }
+    .dtc-composer--dragover { outline: 2px dashed $dtc-blue; outline-offset: -4px; }
+    .dtc-msg__files {
+        display: inline-block;
+        padding: 0 12px 8px;
+        font-size: 0.8em;
+        font-weight: 600;
+        color: $dtc-blue;
+        text-decoration: none;
+
+        &:hover { text-decoration: underline; }
+    }
+
+    // ---- Message inline edit + mentions + quote ----
+    .dtc-edit-area {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid $dtc-blue;
+        border-radius: 6px;
+        padding: 6px 8px;
+        font: inherit;
+        min-height: 60px;
+    }
+    .dtc-edit-actions { display: flex; gap: 6px; margin-top: 4px; }
+    .dtc-edit-save,
+    .dtc-edit-cancel {
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        padding: 3px 10px;
+        font-size: 0.85em;
+    }
+    .dtc-edit-save { background: $dtc-blue; color: #fff; }
+    .dtc-edit-cancel { background: #eef2f7; color: $dtc-grey; }
+    .dtc-composer__mentions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 0;
+        border-bottom: 1px solid $dtc-hairline;
+
+        .dtc-mention-select { min-width: 200px; }
+    }
+    .dtc-msg__body blockquote {
+        border-left: 3px solid $dtc-border;
+        margin: 4px 0;
+        padding: 2px 10px;
+        color: $dtc-grey;
+        font-style: italic;
+    }
 }
 
 // ---- Responsive: stack the two columns ----

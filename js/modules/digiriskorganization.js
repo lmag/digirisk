@@ -18,8 +18,10 @@
  * Initialise l'objet "organization" ainsi que la méthode "init" obligatoire pour la bibliothèque DigiriskDolibarr.
  *
  * Gère l'arborescence GP/UT : réorganisation par glisser-déposer (auto-sauvegarde),
- * renommage inline des libellés, ajout rapide et suppression via dialogs natifs.
+ * ajout rapide et suppression via dialogs natifs.
  * Utilisé à la fois par le panneau de navigation de gauche et par la page d'organisation autonome.
+ * Le renommage inline du libellé passe par le mécanisme générique Saturne (contentEditable.js
+ * + core/ajax/saturne_update_field.php) : aucun code spécifique ici.
  *
  * @since   9.0.0
  * @version 9.0.0
@@ -50,13 +52,12 @@ window.digiriskdolibarr.organization.init = function() {
  */
 window.digiriskdolibarr.organization.event = function() {
 	$(document).on('click', '.organization-tree .toggle-children', window.digiriskdolibarr.organization.toggleChildren);
-	$(document).on('click', '.organization-tree .element-label', window.digiriskdolibarr.organization.editLabel);
 	$(document).on('click', '.organization-tree .quick-add-btn', window.digiriskdolibarr.organization.openQuickAdd);
 	$(document).on('click', '.quick-add-cancel', window.digiriskdolibarr.organization.closeQuickAdd);
 	$(document).on('click', '.organization-tree .delete-element-btn', window.digiriskdolibarr.organization.openDelete);
 	$(document).on('click', '#confirm-delete-yes', window.digiriskdolibarr.organization.confirmDelete);
 	$(document).on('click', '.confirm-delete-cancel', window.digiriskdolibarr.organization.closeDelete);
-	$(document).on('click', '.organization-tree .row-container', window.digiriskdolibarr.organization.navigateToElement);
+	$(document).on('click', '.organization-tree .ref-badge', window.digiriskdolibarr.organization.navigateToElement);
 };
 
 /**
@@ -93,14 +94,15 @@ window.digiriskdolibarr.organization.initSortable = function() {
 	}
 
 	// "stop" fires once on the origin list per drag, capturing both sibling reordering and re-parenting
+	// No disableSelection(): it would cancel selectstart/mousedown inside the rows and block the caret
+	// in the contenteditable labels. Dragging is handle-only, and jQuery UI already prevents the default
+	// selection once a drag starts.
 	$spaces.sortable({
 		connectWith: '.organization-tree .space:not(.workunit)',
 		tolerance:   'intersect',
 		handle:      '.drag-handle',
 		stop:        window.digiriskdolibarr.organization.onDrop
 	});
-
-	$spaces.disableSelection();
 };
 
 /**
@@ -214,88 +216,6 @@ window.digiriskdolibarr.organization.toggleChildren = function() {
 };
 
 /**
- * Édition inline du libellé d'un GP/UT (clic sur le nom).
- *
- * @since   9.0.0
- * @version 9.0.0
- *
- * @param  {MouseEvent} event Les attributs lors du clic.
- * @return {void}
- */
-window.digiriskdolibarr.organization.editLabel = function(event) {
-	event.stopPropagation();
-	let $label = $(this);
-
-	// Empêcher la double activation
-	if ($label.find('input').length) {
-		return;
-	}
-
-	let currentText = $label.text().trim();
-	let $route      = $label.closest('.route');
-	let elementId   = $route.attr('data-route-id') || $route.attr('id');
-	let $input      = $('<input type="text" class="inline-edit-input" />').val(currentText);
-
-	$label.html($input);
-	$input.focus().select();
-
-	// Sauvegarde au blur ou Enter
-	function saveLabel() {
-		let newLabel = $input.val().trim();
-		if (!newLabel || newLabel === currentText) {
-			$label.text(currentText);
-			return;
-		}
-
-		let token = window.saturne.toolbox.getToken();
-		$label.text(newLabel).css('opacity', '0.5');
-
-		$.ajax({
-			url: document.URL + '&action=renameElement&token=' + token,
-			type: 'POST',
-			data: JSON.stringify({ elementId: elementId, label: newLabel }),
-			contentType: 'application/json',
-			success: function(response) {
-				if (response.status === 'success') {
-					$label.css({'opacity': '1', 'color': '#47e58e'});
-					setTimeout(function() { $label.css('color', ''); }, 800);
-				} else {
-					$label.text(currentText).css({'opacity': '1', 'color': '#e05353'});
-					setTimeout(function() { $label.css('color', ''); }, 1500);
-				}
-			},
-			error: function() {
-				$label.text(currentText).css({'opacity': '1', 'color': '#e05353'});
-				setTimeout(function() { $label.css('color', ''); }, 1500);
-			}
-		});
-	}
-
-	$input.on('blur', saveLabel);
-	$input.on('keydown', function(keyEvent) {
-		if (keyEvent.key === 'Enter') {
-			keyEvent.preventDefault();
-			$input.blur();
-		}
-		if (keyEvent.key === 'Escape') {
-			$label.text(currentText);
-		}
-		if (keyEvent.key === 'Tab') {
-			keyEvent.preventDefault();
-			$input.off('blur'); // Éviter le double-save
-			saveLabel();
-			// Trouver tous les labels visibles et naviguer
-			let $allLabels   = $('.organization-tree .element-label:visible');
-			let currentIndex = $allLabels.index($label);
-			let nextIndex    = keyEvent.shiftKey ? currentIndex - 1 : currentIndex + 1;
-			if (nextIndex >= 0 && nextIndex < $allLabels.length) {
-				setTimeout(function() { $allLabels.eq(nextIndex).trigger('click'); }, 50);
-			}
-		}
-	});
-};
-
-/**
  * Ouvre le dialog d'ajout rapide d'un GP/UT.
  *
  * @since   9.0.0
@@ -399,22 +319,17 @@ window.digiriskdolibarr.organization.closeDelete = function() {
 };
 
 /**
- * Navigation : un clic sur la carte de l'élément (hors libellé éditable et hors contrôles)
- * ouvre la page de l'élément (lien du badge de référence).
+ * Navigation : un clic sur le badge de référence (ex. GP1) ouvre la page de l'élément.
+ * Restreint au seul badge — et non à toute la ligne — pour ne pas entrer en conflit
+ * avec l'édition du libellé au clic sur la carte.
  *
  * @since   9.0.0
  * @version 9.0.0
  *
- * @param  {MouseEvent} event Les attributs lors du clic.
  * @return {void}
  */
-window.digiriskdolibarr.organization.navigateToElement = function(event) {
-	// Laisser leur comportement au libellé éditable et aux contrôles interactifs (chevron, photo, poignée, boutons, liens)
-	if ($(event.target).closest('.element-label, .drag-handle, .toggle-unit, .chevron, .actions, .open-media-gallery, .photo-container, a, input, button').length) {
-		return;
-	}
-
-	let href = $(this).find('.ref-badge a').attr('href');
+window.digiriskdolibarr.organization.navigateToElement = function() {
+	let href = $(this).find('a').attr('href');
 	if (href) {
 		window.location.href = href;
 	}
