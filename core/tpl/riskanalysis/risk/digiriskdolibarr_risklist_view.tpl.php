@@ -723,10 +723,12 @@ $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
                                                 </div>
                                             </td>
                                             <td>
-                                                <?php
-                                                $relativepath = 'digiriskdolibarr/medias/thumbs';
-                                                print saturne_show_medias_linked('digiriskdolibarr', $conf->digiriskdolibarr->multidir_output[$conf->entity] . '/riskassessment/tmp/RA0', 'small', 0, 0, 0, 0, $onPhone ? 40 : 50, $onPhone ? 40 : 50, 1, 0, 0, '/riskassessment/tmp/RA0');
-                                                ?>
+                                                <div class="element-linked-medias-list">
+                                                    <?php
+                                                    $relativepath = 'digiriskdolibarr/medias/thumbs';
+                                                    print saturne_show_medias_linked('digiriskdolibarr', $conf->digiriskdolibarr->multidir_output[$conf->entity] . '/riskassessment/tmp/RA0', 'small', 0, 0, 0, 0, $onPhone ? 40 : 50, $onPhone ? 40 : 50, 1, 0, 0, '/riskassessment/tmp/RA0');
+                                                    ?>
+                                                </div>
                                             </td>
                                         </tr>
                                     </table>
@@ -918,7 +920,7 @@ foreach ($risk->fields as $key => $val) {
         } elseif ($key == 'fk_element') {
             print $digiriskelement->selectDigiriskElementList($search['fk_element'] ?? '', 'search_fk_element', ['customsql' => 'rowid NOT IN (' . implode(',', $deletedElements) . ')'], 1, 0, [], 0, 0, 'minwidth100 maxwidth300', 0, false, 1);
         } elseif ($key == 'category') { ?>
-            <div class="wpeo-dropdown dropdown-large dropdown-grid category-danger padding" style="position: inherit">
+            <div class="wpeo-dropdown dropdown-large dropdown-grid category-danger padding">
                 <input class="input-hidden-danger" type="hidden" name="<?php echo 'search_' . $key ?>" value="<?php echo dol_escape_htmltag($search[$key] ?? '') ?>" />
                 <?php if (dol_strlen(dol_escape_htmltag($search[$key] ?? '')) == 0) : ?>
                     <div class="dropdown-toggle dropdown-add-button button-cotation">

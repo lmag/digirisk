@@ -78,47 +78,75 @@ window.digiriskdolibarr.actionplanKanban.event = function() {
         });
     });
 
-    // Responsible: click initial → show select
+    // Responsible: click initial → toggle searchable dropdown
     $(document).on('click', '.kanban-initial-responsible', function(e) {
+        var $wrapper  = $(this).closest('.kanban-responsible-wrapper');
+        var $dropdown = $wrapper.find('.kanban-responsible-dropdown');
+        if (!$dropdown.length) return; // other kanban boards use their own picker
+
         e.stopPropagation();
-        var $wrapper = $(this).closest('.kanban-responsible-wrapper');
-        var $select  = $wrapper.find('.kanban-responsible-select');
-        $(this).hide();
-        $select.addClass('visible').trigger('focus');
+        // Close all other dropdowns first
+        $('.kanban-contributor-dropdown.visible, .kanban-responsible-dropdown.visible').not($dropdown).each(function() {
+            $(this).removeClass('visible');
+            $(this).closest('.kanban-card').removeClass('kanban-card-dropdown-open');
+        });
+
+        var $card = $(this).closest('.kanban-card');
+        $dropdown.toggleClass('visible');
+        if ($dropdown.hasClass('visible')) {
+            $card.addClass('kanban-card-dropdown-open');
+            var $search = $dropdown.find('.kanban-responsible-search');
+            $search.val('').trigger('input');
+            $search.trigger('focus');
+        } else {
+            $card.removeClass('kanban-card-dropdown-open');
+        }
     });
 
-    // Responsible: change → save + hide select → update initial
-    $(document).on('change', '.kanban-responsible-select', function() {
-        var $select  = $(this);
-        var $wrapper = $select.closest('.kanban-responsible-wrapper');
-        var $initial = $wrapper.find('.kanban-initial-responsible');
-        var taskId   = $select.data('task-id');
-        var userId   = $select.val();
-        var selText  = $select.find('option:selected').text().trim();
-        var newInit  = userId > 0 ? ($select.find('option:selected').data('initial') || selText.substring(0, 2).toUpperCase()) : '?';
+    // Responsible search: filter options
+    $(document).on('input', '.kanban-responsible-search', function() {
+        var query = $(this).val().toLowerCase();
+        $(this).closest('.kanban-responsible-dropdown').find('.kanban-responsible-option').each(function() {
+            var text = $(this).data('search') || '';
+            if (query === '' || String(text).indexOf(query) !== -1) {
+                $(this).removeClass('hidden');
+            } else {
+                $(this).addClass('hidden');
+            }
+        });
+    });
 
-        // Hide select, update initial, show initial
-        $select.removeClass('visible');
+    // Responsible option click: AJAX save + update initial
+    $(document).on('click', '.kanban-responsible-option', function(e) {
+        e.stopPropagation();
+        var $opt = $(this);
+        if ($opt.hasClass('assigned')) return;
+
+        var $dropdown = $opt.closest('.kanban-responsible-dropdown');
+        var $wrapper  = $dropdown.closest('.kanban-responsible-wrapper');
+        var $initial  = $wrapper.find('.kanban-initial-responsible');
+        var taskId    = $dropdown.data('task-id');
+        var userId    = parseInt($opt.data('value'), 10);
+        var optText   = $opt.text().trim();
+        var newInit   = userId > 0 ? ($opt.data('initial') || optText.substring(0, 2).toUpperCase()) : '?';
+
+        // Move the check mark to the newly selected option
+        $dropdown.find('.kanban-responsible-option.assigned').removeClass('assigned').find('.fa-check').remove();
+        $opt.addClass('assigned').append('<i class="fas fa-check" style="margin-left:4px;font-size:9px;color:#28a745"></i>');
+
+        $dropdown.removeClass('visible');
+        $dropdown.closest('.kanban-card').removeClass('kanban-card-dropdown-open');
+        $wrapper.attr('data-current-user', userId);
+
         $initial.text(newInit)
-                .attr('title', userId > 0 ? selText : '')
-                .toggleClass('kanban-initial-empty', userId == 0)
-                .show();
+                .attr('title', userId > 0 ? optText : '')
+                .toggleClass('kanban-initial-empty', userId === 0);
 
-        window.digiriskdolibarr.actionplanKanban.saveResponsible(taskId, userId, $select);
-    });
-
-    // Responsible: blur select → hide if no change
-    $(document).on('blur', '.kanban-responsible-select', function() {
-        var $select = $(this);
-        var $initial = $select.siblings('.kanban-initial-responsible');
-        setTimeout(function() {
-            $select.removeClass('visible');
-            $initial.show();
-        }, 200);
+        window.digiriskdolibarr.actionplanKanban.saveResponsible(taskId, userId, $dropdown);
     });
 
     // Prevent card drag when interacting with selects
-    $(document).on('mousedown', '.kanban-responsible-select, .kanban-contributor-dropdown, .kanban-add-contributor-btn, .kanban-initial-responsible, .kanban-contributor-search, .kanban-contributor-option', function(e) {
+    $(document).on('mousedown', '.kanban-responsible-dropdown, .kanban-responsible-search, .kanban-responsible-option, .kanban-contributor-dropdown, .kanban-add-contributor-btn, .kanban-initial-responsible, .kanban-contributor-search, .kanban-contributor-option', function(e) {
         e.stopPropagation();
     });
 
@@ -127,7 +155,7 @@ window.digiriskdolibarr.actionplanKanban.event = function() {
         e.preventDefault();
         e.stopPropagation();
         // Close all other dropdowns first
-        $('.kanban-contributor-dropdown.visible').not($(this).siblings('.kanban-contributor-dropdown')).each(function() {
+        $('.kanban-contributor-dropdown.visible, .kanban-responsible-dropdown.visible').not($(this).siblings('.kanban-contributor-dropdown')).each(function() {
             $(this).removeClass('visible');
             $(this).closest('.kanban-card').removeClass('kanban-card-dropdown-open');
         });
@@ -178,12 +206,12 @@ window.digiriskdolibarr.actionplanKanban.event = function() {
 
     // Close dropdown on outside click
     $(document).on('click', function() {
-        $('.kanban-contributor-dropdown.visible').each(function() {
+        $('.kanban-contributor-dropdown.visible, .kanban-responsible-dropdown.visible').each(function() {
             $(this).removeClass('visible');
             $(this).closest('.kanban-card').removeClass('kanban-card-dropdown-open');
         });
     });
-    $(document).on('click', '.kanban-contributor-dropdown', function(e) {
+    $(document).on('click', '.kanban-contributor-dropdown, .kanban-responsible-dropdown', function(e) {
         e.stopPropagation();
     });
 
@@ -379,9 +407,35 @@ window.digiriskdolibarr.actionplanKanban.event = function() {
         $value.replaceWith($input);
         $input.trigger('focus');
 
+        var isTyping    = false; // keyboard edit under way, don't save on intermediate values
+        var typingTimer = null;
+        var isDone      = false; // guard: blur still fires after Enter / Escape / picker save
+
+        function restore(text) {
+            $input.replaceWith($('<span class="kanban-date-value"></span>').text(text));
+        }
+
         function saveDate() {
+            if (isDone) return;
+            isDone = true;
+            clearTimeout(typingTimer);
+            $input.off('blur change keydown');
+
             var val = $input.val();
             var $card = $date.closest('.kanban-card');
+
+            // A half-typed date reads as an empty value: restore instead of erasing
+            // the date the user was in the middle of editing.
+            if (!val && $input[0].validity && $input[0].validity.badInput) {
+                restore(origText);
+                return;
+            }
+
+            // Nothing changed: no need for a round trip
+            if (val === rawVal) {
+                restore(origText);
+                return;
+            }
 
             // Cross-validate start vs end date
             if (val) {
@@ -406,8 +460,7 @@ window.digiriskdolibarr.actionplanKanban.event = function() {
                         }, 3000);
 
                         // Restore original text
-                        var $newValue = $('<span class="kanban-date-value"></span>').text(origText);
-                        $input.replaceWith($newValue);
+                        restore(origText);
                         return;
                     }
                 }
@@ -447,17 +500,33 @@ window.digiriskdolibarr.actionplanKanban.event = function() {
             });
         }
 
+        // Picking a date in the native calendar fires `change` without any keystroke:
+        // that one is a deliberate choice, save it right away.
         $input.on('change', function() {
-            $input.off('blur');
+            if (isTyping) return;
             saveDate();
         });
         $input.on('blur', saveDate);
         $input.on('keydown', function(ev) {
             if (ev.key === 'Escape') {
-                $input.off('blur').off('change');
-                var $newValue = $('<span class="kanban-date-value"></span>').text(origText);
-                $input.replaceWith($newValue);
+                isDone = true;
+                clearTimeout(typingTimer);
+                $input.off('blur change');
+                restore(origText);
+                return;
             }
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                saveDate();
+                return;
+            }
+            // Typing digits rewrites the field segment by segment and the browser
+            // fires a `change` on every intermediate value (typing "18" validates
+            // "01" first, which saved and closed the input mid-edit). Hold the save
+            // until the user leaves the field or presses Enter.
+            isTyping = true;
+            clearTimeout(typingTimer);
+            typingTimer = setTimeout(function() { isTyping = false; }, 1500);
         });
     });
 
@@ -653,7 +722,7 @@ window.digiriskdolibarr.actionplanKanban.initSortable = function() {
         placeholder: 'kanban-card-placeholder',
         tolerance: 'pointer',
         cursor: 'grabbing',
-        cancel: '.kanban-progress-bar, .kanban-card-progress, .kanban-responsible-select, .kanban-contributor-dropdown, .kanban-add-contributor-btn, .kanban-initial-responsible, .kanban-contributor-search, .kanban-contributor-option, .kanban-card-label, .kanban-inline-edit, .kanban-editable-meta, .kanban-remove-contact, .kanban-initial-wrapper, .kanban-editable-date, .kanban-tag, .kanban-tag-remove, .kanban-add-tag-btn, .kanban-tag-dropdown, .kanban-tag-option',
+        cancel: '.kanban-progress-bar, .kanban-card-progress, .kanban-responsible-dropdown, .kanban-responsible-search, .kanban-responsible-option, .kanban-contributor-dropdown, .kanban-add-contributor-btn, .kanban-initial-responsible, .kanban-contributor-search, .kanban-contributor-option, .kanban-card-label, .kanban-inline-edit, .kanban-editable-meta, .kanban-remove-contact, .kanban-initial-wrapper, .kanban-editable-date, .kanban-tag, .kanban-tag-remove, .kanban-add-tag-btn, .kanban-tag-dropdown, .kanban-tag-option',
         receive: function(event, ui) {
             var $card    = ui.item;
             var $column  = $(this);

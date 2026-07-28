@@ -5,6 +5,13 @@ DigiriskActionType                       = Digirisk action type
 Actions                                  = Actions
 ActionsTab                               = Actions
 CurativeActions                          = Curative actions
+PreventiveActions                        = Preventive actions
+TotalPlannedBudget                       = Planned budget
+AccidentInvestigationDocumentPDF         = EA-A4-PORTRAIT
+PreventionPlanDocumentPDF                = PP-A4-PORTRAIT
+PreventionPlanDocumentPDFDescription     = Generate the prevention plan as a PDF
+AccidentInvestigationDocumentPDFDescription = Generate the accident investigation as a PDF
+AccidentInvestigationDocumentGeneratedAt = Generated on
 CorrectiveActions                        = Corrective actions
 AddCurativeAction                        = Add a curative action
 AddCorrectiveAction                      = Add a corrective action
@@ -94,7 +101,6 @@ Mentioned = Mentioned
 
 # Mobile prevention plan quick creation
 MobileQuickCreation = Mobile quick creation
-MobilePreventionPlanMin = prevention plans from the mobile interface
 MobilePPInteriorCompany = User company (interior)
 MobilePPResponsibleAutoSign = Responsible (signs automatically)
 MobilePPSignatureSaved = Saved signature
@@ -103,7 +109,8 @@ MobilePPDrawSignatureHint = Draw your signature below then save it. It will be r
 MobilePPClearSignature = Clear
 MobilePPSaveSignature = Save my signature
 MobilePPExteriorCompany = Exterior company
-Siren = SIREN
+MobileSirenOrSiret = SIREN / SIRET
+MobileSirenOrSiretPlaceholder = 9 or 14 digits
 MobilePPResponsibleToSign = Responsible to sign
 MobilePPChooseExistingContact = Choose an existing contact
 MobilePPNewContact = New contact
@@ -113,7 +120,7 @@ MobilePPMaxOneYearHint = One year maximum between start and end dates.
 MobilePPSubmit = Create prevention plan
 MobilePPErrorNoSignature = You must save your signature before creating the plan.
 MobilePPErrorEmptySignature = The signature is empty.
-MobilePPErrorInvalidSiren = Invalid SIREN (9 digits expected).
+MobilePPErrorInvalidSiren = Invalid SIREN or SIRET (9 or 14 digits expected).
 MobilePPErrorEndBeforeStart = The end date must be after the start date.
 MobilePPErrorMaxOneYear = The duration cannot exceed one year.
 MobilePPErrorDatesRequired = Please fill in the start date and the end date.
@@ -132,10 +139,30 @@ MobilePPSuccessTitle = Prevention plan created
 MobilePPSuccessText = The interior responsible signed automatically. A signature request has been sent to the exterior company.
 MobilePPViewPlan = View plan
 MobilePPCreateAnother = Create another plan
+MobileSuccessInteriorSigned = Interior responsible: signed
+MobileSuccessExteriorNotified = Exterior company: signature request sent
+MobileSpreadShareTitle = Share the spread
+MobileSpreadShareText = Have the people involved scan this code. With no account and no login, they fill in their details, upload their documents and sign.
+MobileSpreadOpen = Open the spread
 MobilePPRisks = Risks
 MobilePPAddRisk = Add a risk
 MobilePPRiskModalTitle = Choose a risk
 MobilePPRiskComment = Comment
+MobilePPRiskDescriptionPlaceholder = Describe the risk on site
+MobilePPNoRiskYet = No risk added yet.
+MobilePPDeleteRiskTitle = Delete the risk
+MobilePPDeleteRiskConfirm = "%s" will be removed from the plan, along with its description, its photos and its protections.
+MobilePPUserCompany = User company
+MobilePPUserCompanyShort = EU
+MobilePPConcernedCompanies = Concerns
+MobilePPExteriorCompanyShort = EE
+MobilePPPriorFormalities = Prior formalities
+MobilePPPriorVisitDone = Prior joint inspection done
+MobilePPPriorVisitTextPlaceholder = What was observed during the inspection
+MobileRiskCompanies = Companies concerned by the risks (mobile)
+CertificationDictionary = Certifications and qualifications
+MobilePPChooseExistingCompany = Choose an existing third party
+MobilePPOrFillManually = or fill in the details
 MobilePPProtections = Protections
 MobilePPAddProtection = Add a protection
 MobilePPProtectionModalTitle = Choose a protection
@@ -145,3 +172,81 @@ MobilePPCertifications = Required certifications
 MobilePPAddCertification = Add a certification
 MobileCertifications = Certifications (mobile)
 MobilePPUploadCertPhoto = Upload a photo
+
+# Mobile fire permit quick creation
+MobileFPPreventionPlanHelp = The exterior company and the period of the selected plan are reused automatically.
+MobileFPPeriod = Location and work period
+MobileFPMaxOneMonthHint = One month maximum between the start and the end of the work.
+MobileFPErrorMaxOneMonth = The duration cannot exceed one month.
+MobileFPErrorNoProject = No default fire permit project is configured.
+MobileFPWorkTypes = Types of work
+MobileFPAddWorkType = Add a type of work
+MobileFPWorkTypeModalTitle = Choose a type of work
+MobileFPSubmit = Create fire permit
+MobileFPCreated = Fire permit %s created.
+MobileFPUpdated = Fire permit %s updated.
+MobileFPSignatureEmailSubject = Signature request for fire permit %s
+MobileFPSignatureEmailContent = Hello,<br><br>You are invited to sign the fire permit for %s.<br><br><a href="%s">Click here to sign</a><br><br>Best regards.
+MobileFPSuccessTitle = Fire permit created
+MobileFPViewPermit = View permit
+MobileFPCreateAnother = Create another permit
+
+# Digirisk PWA
+PwaApplication = Application
+PwaNavHome = Home
+PwaNavPreventionPlans = Plans
+PwaNavFirePermits = Permits
+PwaNavMenu = Menu
+PwaNavFavoritesHint = Favorites shown at the bottom (max %s)
+PwaNavAddFavorite = Add to favorites
+PwaNavRemoveFavorite = Remove from favorites
+PwaHello = Hello %s
+PwaResultCount = %s result(s)
+PwaTilePreventionPlanInProgress = Plans in progress
+PwaTilePreventionPlanToSign = Plans to sign
+PwaTileFirePermitInProgress = Permits in progress
+PwaTileFirePermitToSign = Permits to sign
+
+# Task mass actions
+MassValidateTasks = Validate tasks
+MassChangeTasksProject = Change project
+ConfirmMassValidateTasksQuestion = Are you sure you want to validate the %s selected task(s)? Only draft tasks will be validated.
+ConfirmMassChangeTasksProjectQuestion = Are you sure you want to attach the %s selected task(s) to the chosen project?
+MassValidateTasksSuccess = %s task(s) validated out of %s selected
+MassChangeTasksProjectSuccess = %s task(s) attached to project %s
+
+# Missing Saturne module
+SaturneModuleMissing = The Saturne module is required by Digirisk. Download it for free on the Dolistore (https://dolistore.com/en/modules/1906-Saturne.html) and install it before enabling Digirisk.
+
+# Ticket - modification traceability - issue #4885
+TicketLogModifications = Modification traceability
+TicketLogModificationsDesc = Create an event for every edit made from the ticket card (subject, message, registers, assignee, third party, project, progress, status, tasks, documents)
+TicketMessageEdited = Message edited
+TicketMessageDeleted = Message deleted
+TicketTaskCreated = Task created: %s
+TicketDocumentGenerated = Document generated
+TicketFileDeleted = File deleted
+
+# Plan de prevention PDF
+PreventionPlanLegalNotice = The prevention plan is a mandatory document preventing the risks caused by several companies working on the same site, as per article R4512-7 of the French labour code.
+PreventionPlanUserCompany = User company - EU
+PreventionPlanExteriorCompany = Exterior company - EE
+PreventionPlanUserCompanyResponsible = User company responsible (EU)
+PreventionPlanExteriorCompanyResponsible = Exterior company responsible (EE)
+EmergencyNumbers = Emergency numbers
+Firefighters = Firefighters
+AnyEmergency = Any emergency
+FirstAid = First aid
+PriorVisitIntro = The user company carried out a prior joint inspection on %s. During this visit the following points were presented by the user company:
+PriorVisitCheckList = Work places|Installations found there|Equipment made available to the exterior companies|Delimit the intervention area of the exterior companies|Mark the zones that may be dangerous for workers|Indicate the traffic lanes for workers, vehicles and machines of the exterior companies|Define the access ways to the premises used by the exterior companies
+PriorVisitComments = The following comments were recorded:
+InterventionPeriodSentence = This plan starts on %s and ends on %s. Interventions will take place at the following times:
+RiskAnalysis = Analysis of actions, risks and prevention means
+RiskAnalysisIntro = You planned %s intervention(s) for this prevention plan: below are the planned actions, the risks involved and the prevention means.
+PreventionPlanAttendants = Attendants: exterior company (EE) and subcontractors
+Morning = Morning
+Afternoon = Afternoon
+Signatures = Signatures
+SignaturePending = Pending
+PreventionPlanRiskPhotos = Risk photos
+InterventionPeriodOnly = This plan starts on %s and ends on %s.

@@ -172,7 +172,17 @@ class ActionsDigiriskdolibarr
             </script>
             <?php
 
-            $this->resprints = '<link rel="manifest" href="' . DOL_URL_ROOT . '/custom/digiriskdolibarr/manifest.json.php' . '" />';
+            // The internal application (prevention plans and fire permits) declares its own manifest,
+            // so it installs separately from the public ticket declaration app.
+            $manifestFile = 'manifest.json.php';
+            foreach (['/view/frontend/', 'preventionplan_mobile_create.php', 'firepermit_mobile_create.php'] as $pwaPath) {
+                if (strpos($_SERVER['PHP_SELF'], $pwaPath) !== false) {
+                    $manifestFile = 'manifest_pwa.json.php';
+                    break;
+                }
+            }
+
+            $this->resprints = '<link rel="manifest" href="' . DOL_URL_ROOT . '/custom/digiriskdolibarr/' . $manifestFile . '" />';
         }
 
         return 0; // or return 1 to replace standard code
@@ -513,8 +523,9 @@ class ActionsDigiriskdolibarr
                     if (strpos($parameters['context'], 'projecttaskcard') !== false && !GETPOSTISSET('withproject')) {
                         return 0;
                     } else {
-                        if (preg_match('/projectcard|projectcontactcard|projecttaskscard/', $parameters['context'])) {
-                            $projectId = GETPOST('id');
+                        if (preg_match('/projectcard|projectcontactcard|projecttaskscard|projectOverview/', $parameters['context'])) {
+                            $project->fetch(GETPOSTINT('id'), GETPOST('ref', 'alpha'));
+                            $projectId = $project->id;
                         } else if (GETPOSTISSET('projectid') || GETPOSTISSET('ref')) {
                             $project->fetch( GETPOST('projectid'), GETPOST('ref'));
                             $projectId = $project->id;
@@ -522,6 +533,12 @@ class ActionsDigiriskdolibarr
                             $task->fetch(GETPOST('id'));
                             $projectId = $task->fk_project;
                         }
+
+                        // Sans projet identifié, getTasksArray() agrégerait les tâches de toute l'instance
+                        if ($projectId <= 0) {
+                            return 0;
+                        }
+
                         $allTasks = $task->getTasksArray(null, null, $projectId, 0, 0, '', '-1', '', 0, 0, $extrafields);
                         $totalConsumedTime       = 0;
                         $totatConsumedTimeAmount = 0;
@@ -531,14 +548,16 @@ class ActionsDigiriskdolibarr
                         if (is_array($allTasks) && !empty($allTasks)) {
                             $nbTasks = count($allTasks);
                             foreach ($allTasks as $taskSingle) {
-                                $filter       = ' AND fk_element = ' . $taskSingle->id;
-                                $allTimespent = $task->fetchAllTimeSpentAllUsers($filter);
-                                foreach ($allTimespent as $timespent) {
-                                    $totatConsumedTimeAmount += ((float)$timespent->timespent_duration / 3600) * (float)$timespent->timespent_thm;
-                                }
-                                $totalConsumedTime += (float)$taskSingle->duration;
-                                $totalProgress     += (float)$taskSingle->progress;
-                                $totalTasksBudget  += (float)$taskSingle->budget_amount;
+                                $totalConsumedTime += (float) $taskSingle->duration_effective;
+                                $totalProgress     += (float) $taskSingle->progress;
+                                $totalTasksBudget  += (float) $taskSingle->budget_amount;
+                            }
+                        }
+
+                        $allTimespent = $task->fetchAllTimeSpentAllUsers(' AND project_id = ' . ((int) $projectId));
+                        if (is_array($allTimespent)) {
+                            foreach ($allTimespent as $timespent) {
+                                $totatConsumedTimeAmount += ((float) $timespent->timespent_duration / 3600) * (float) $timespent->timespent_thm;
                             }
                         }
                         $outTotatConsumedTime       = '<tr><td>' . $langs->trans('TotalConsumedTime') . '</td><td>' . convertSecondToTime($totalConsumedTime, 'allhourmin') . '</td></tr>';
@@ -853,12 +872,9 @@ class ActionsDigiriskdolibarr
 
         $sql = '';
 		/* print_r($parameters); print_r($object); echo "action: " . $action; */
-		if (preg_match('/ticketlist|thirdpartyticket|projectticket/', $parameters['context'])) {	    // do something only for the context 'somecontext1' or 'somecontext2'
-			$searchCategoryTicketList = GETPOST('search_category_ticket_list');
-			if (!empty($searchCategoryTicketList)) {
-				$sql = ' LEFT JOIN '.MAIN_DB_PREFIX."categorie_ticket as ct ON t.rowid = ct.fk_ticket"; // We'll need this table joined to the select in order to filter by categ
-			}
-		}
+		// No join on categorie_ticket: the category filter is built with subqueries in printFieldListWhere().
+		// Joining would return one row per category link, and the record count of the list (a COUNT(*) built
+		// from this same request, with the GROUP BY stripped) would count those links instead of the tickets.
 
         $this->resprints = $sql;
         return 0; // or return 1 to replace standard code
@@ -881,7 +897,7 @@ class ActionsDigiriskdolibarr
 			if (is_array($searchCategoryTicketList) && !empty($searchCategoryTicketList)) {
 				foreach ($searchCategoryTicketList as $searchCategoryTicket) {
 					if (intval($searchCategoryTicket) == -2) {
-						$searchCategoryTicketSqlList[] = "ct.fk_categorie IS NULL";
+						$searchCategoryTicketSqlList[] = "t.rowid NOT IN (SELECT fk_ticket FROM " . MAIN_DB_PREFIX . "categorie_ticket)";
 					} elseif (intval($searchCategoryTicket) > 0) {
 						$searchCategoryTicketSqlList[] = "t.rowid IN (SELECT fk_ticket FROM " . MAIN_DB_PREFIX . "categorie_ticket WHERE fk_categorie = " . ((int)$searchCategoryTicket) . ")";
 					}
@@ -891,15 +907,14 @@ class ActionsDigiriskdolibarr
 				}
 			} else {
 				if (!empty($searchCategoryTicketList) && $searchCategoryTicketList > 0) {
-					$sql = " AND ct.fk_categorie = ".((int) $searchCategoryTicketList);
+					$sql = " AND t.rowid IN (SELECT fk_ticket FROM " . MAIN_DB_PREFIX . "categorie_ticket WHERE fk_categorie = " . ((int) $searchCategoryTicketList) . ")";
 				}
 				if ($searchCategoryTicketList == -2) {
-					$sql = " AND ct.fk_categorie IS NULL";
+					$sql = " AND t.rowid NOT IN (SELECT fk_ticket FROM " . MAIN_DB_PREFIX . "categorie_ticket)";
 				}
 			}
-			if (!empty($searchCategoryTicketList)) {
-				$sql .= " GROUP BY t.rowid";
-			}
+			// No GROUP BY: the subqueries above never duplicate a ticket, and a GROUP BY here would be
+			// stripped from the COUNT(*) request of the list, giving a wrong number of records and phantom pages.
 
             $this->resprints = $sql;
 		}
@@ -1042,6 +1057,212 @@ class ActionsDigiriskdolibarr
         }
 
         return 0; // or return 1 to replace standard code
+    }
+
+    /**
+     * Overloading the addMoreMassActions function : replacing the parent's function with the one below
+     *
+     * @param  array $parameters Hook metadata (context, etc...)
+     * @return int               0 < on error, 0 on success, 1 to replace standard code
+     */
+    public function addMoreMassActions(array $parameters): int
+    {
+        global $langs, $user;
+
+        if (preg_match('/tasklist|projecttaskscard/', $parameters['context']) && $user->hasRight('projet', 'creer')) {
+            // Hook runs on a Dolibarr core page, module lang files are not loaded there
+            $langs->load('digiriskdolibarr@digiriskdolibarr');
+
+            $arrayOfMassActions = [
+                'prevalidatetasks'      => '<span class="fas fa-check paddingrightonly"></span>' . $langs->trans('MassValidateTasks'),
+                'prechangeprojecttasks' => '<span class="fas fa-random paddingrightonly"></span>' . $langs->trans('MassChangeTasksProject')
+            ];
+
+            $out = '';
+            foreach ($arrayOfMassActions as $code => $label) {
+                $out .= '<option value="' . $code . '" data-html="' . dol_escape_htmltag($label) . '">' . $label . '</option>';
+            }
+
+            $this->resprints = $out;
+        }
+
+        return 0; // or return 1 to replace standard code
+    }
+
+    /**
+     * Overloading the doPreMassActions function : replacing the parent's function with the one below
+     *
+     * @param  array $parameters Hook metadata (context, massaction, toselect, etc...)
+     * @return int               0 < on error, 0 on success, 1 to replace standard code
+     * @throws Exception
+     */
+    public function doPreMassActions(array $parameters): int
+    {
+        global $form, $langs, $user;
+
+        if (!preg_match('/tasklist|projecttaskscard/', $parameters['context']) || !$user->hasRight('projet', 'creer')) {
+            return 0;
+        }
+
+        $langs->load('digiriskdolibarr@digiriskdolibarr');
+
+        $nbSelected = is_array($parameters['toselect']) ? count($parameters['toselect']) : 0;
+
+        if ($parameters['massaction'] == 'prevalidatetasks') {
+            $this->resprints = $form->formconfirm($_SERVER['PHP_SELF'], $langs->trans('MassValidateTasks'), $langs->trans('ConfirmMassValidateTasksQuestion', $nbSelected), 'digirisk_validate_tasks', null, 'yes', 0, 200, 500, 1);
+        }
+
+        if ($parameters['massaction'] == 'prechangeprojecttasks') {
+            require_once DOL_DOCUMENT_ROOT . '/core/class/html.formprojet.class.php';
+
+            $formProject  = new FormProjets($this->db);
+            $formQuestion = [
+                [
+                    'type'  => 'other',
+                    'name'  => 'digiriskdolibarr_fk_project',
+                    'label' => $langs->trans('Project'),
+                    'value' => $formProject->select_projects(-1, GETPOSTINT('digiriskdolibarr_fk_project'), 'digiriskdolibarr_fk_project', 0, 0, 1, 1, 0, 0, 0, '', 1, 0, 'minwidth300')
+                ]
+            ];
+
+            $this->resprints = $form->formconfirm($_SERVER['PHP_SELF'], $langs->trans('MassChangeTasksProject'), $langs->trans('ConfirmMassChangeTasksProjectQuestion', $nbSelected), 'digirisk_change_project_tasks', $formQuestion, 'yes', 0, 250, 500, 1);
+        }
+
+        return 0; // or return 1 to replace standard code
+    }
+
+    /**
+     * Overloading the doMassActions function : replacing the parent's function with the one below
+     *
+     * @param  array  $parameters Hook metadata (context, toselect, etc...)
+     * @param  object $object     Current object
+     * @param  string $action     Current action
+     * @return int                0 < on error, 0 on success, 1 to replace standard code
+     */
+    public function doMassActions(array $parameters, $object, $action): int
+    {
+        global $langs, $user;
+
+        if (!preg_match('/tasklist|projecttaskscard/', $parameters['context']) || !$user->hasRight('projet', 'creer')) {
+            return 0;
+        }
+
+        if (!in_array($action, ['digirisk_validate_tasks', 'digirisk_change_project_tasks']) || GETPOST('confirm', 'alpha') != 'yes') {
+            return 0;
+        }
+
+        $langs->load('digiriskdolibarr@digiriskdolibarr');
+
+        $taskIds = array_filter(array_map('intval', (array) $parameters['toselect']));
+        if (empty($taskIds)) {
+            $this->errors[] = $langs->trans('ErrorSelectAtLeastOne');
+            return -1;
+        }
+
+        require_once DOL_DOCUMENT_ROOT . '/projet/class/task.class.php';
+
+        if ($action == 'digirisk_validate_tasks') {
+            $nbValidated = 0;
+            foreach ($taskIds as $taskId) {
+                $task = new Task($this->db);
+                // Only a draft task can be validated, same rule as the task card
+                if ($task->fetch($taskId) <= 0 || $task->status != Task::STATUS_DRAFT) {
+                    continue;
+                }
+
+                // An explicit trigger code is needed, triggers parse it and warn on the empty one Dolibarr sends by default
+                if ($task->setStatusCommon($user, Task::STATUS_VALIDATED, 0, 'TASK_VALIDATE') < 0) {
+                    $this->errors[] = $task->errorsToString();
+                    return -1;
+                }
+
+                $nbValidated++;
+            }
+
+            setEventMessages($langs->trans('MassValidateTasksSuccess', $nbValidated, count($taskIds)), []);
+
+            return 0;
+        }
+
+        $projectId = GETPOSTINT('digiriskdolibarr_fk_project');
+        if ($projectId <= 0) {
+            $this->errors[] = $langs->trans('ErrorFieldRequired', $langs->transnoentities('Project'));
+            return -1;
+        }
+
+        require_once DOL_DOCUMENT_ROOT . '/projet/class/project.class.php';
+
+        $targetProject = new Project($this->db);
+        if ($targetProject->fetch($projectId) <= 0) {
+            $this->errors[] = $langs->trans('ErrorRecordNotFound');
+            return -1;
+        }
+
+        $sourceProjects = [];
+        $nbMoved        = 0;
+        foreach ($taskIds as $taskId) {
+            $task = new Task($this->db);
+            if ($task->fetch($taskId) <= 0 || $task->fk_project == $projectId) {
+                continue;
+            }
+
+            $sourceProjectId = (int) $task->fk_project;
+            if (!isset($sourceProjects[$sourceProjectId])) {
+                $sourceProject                    = new Project($this->db);
+                $sourceProjects[$sourceProjectId] = $sourceProject->fetch($sourceProjectId) > 0 ? $sourceProject->ref : '';
+            }
+
+            // A parent task left behind in the previous project would break the task hierarchy
+            if ($task->fk_task_parent > 0 && !in_array((int) $task->fk_task_parent, $taskIds)) {
+                $task->fk_task_parent = 0;
+            }
+
+            $task->fk_project = $projectId;
+            if ($task->update($user) <= 0) {
+                $this->errors[] = $task->errorsToString();
+                return -1;
+            }
+
+            $this->moveTaskDocuments($task, $sourceProjects[$sourceProjectId], $targetProject->ref);
+
+            $nbMoved++;
+        }
+
+        setEventMessages($langs->trans('MassChangeTasksProjectSuccess', $nbMoved, $targetProject->getNomUrl(1)), []);
+
+        return 0; // or return 1 to replace standard code
+    }
+
+    /**
+     * Move the document directory of a task that has just been attached to another project.
+     * Task files are stored under <project_ref>/<task_ref>, so they have to follow the task.
+     *
+     * @param  Task   $task             Task that has been moved
+     * @param  string $sourceProjectRef Ref of the project the task was attached to
+     * @param  string $targetProjectRef Ref of the project the task is now attached to
+     * @return void
+     */
+    protected function moveTaskDocuments(Task $task, string $sourceProjectRef, string $targetProjectRef): void
+    {
+        global $conf;
+
+        if (empty($sourceProjectRef) || empty($targetProjectRef)) {
+            return;
+        }
+
+        require_once DOL_DOCUMENT_ROOT . '/core/lib/files.lib.php';
+
+        $entity    = !empty($task->entity) ? (int) $task->entity : (int) $conf->entity;
+        $rootDir   = $conf->project->multidir_output[$entity] ?? $conf->project->dir_output;
+        $sourceDir = $rootDir . '/' . dol_sanitizeFileName($sourceProjectRef) . '/' . dol_sanitizeFileName($task->ref);
+        if (!is_dir($sourceDir)) {
+            return;
+        }
+
+        $targetDir = $rootDir . '/' . dol_sanitizeFileName($targetProjectRef) . '/' . dol_sanitizeFileName($task->ref);
+
+        dol_mkdir(dirname($targetDir));
+        dol_move_dir($sourceDir, $targetDir);
     }
 
     /**
@@ -1382,6 +1603,11 @@ class ActionsDigiriskdolibarr
             $objectsMetadata['digiriskdolibarr_' . $objectName]['class_path'] = 'custom/digiriskdolibarr/class/riskanalysis/' . $objectName . '.class.php';
             $objectsMetadata['digiriskdolibarr_' . $objectName]['lib_path']   = 'custom/digiriskdolibarr/lib/digiriskdolibarr_digiriskelement.lib.php';
         }
+        // La table de l'enquete accident ne suit pas la regle de nommage des autres objets : sans
+        // cette correction, la metadonnee pointe une table inexistante et plus rien ne matche
+        // (les fichiers lies, donc la diffusion, cherchent sur src_object_type = table_element)
+        $objectsMetadata['digiriskdolibarr_accidentinvestigation']['table_element'] = 'digiriskdolibarr_accident_investigation';
+
         $objectsMetadata['digiriskdolibarr_digiriskelement']['create_url'] = 'custom/digiriskdolibarr/view/digiriskelement/digiriskelement_card.php?action=create&element_type=groupment&fk_parent=0';
 
         $objectsMetadata['digiriskdolibarr_evaluator']['create_url'] = '';
@@ -1433,6 +1659,8 @@ class ActionsDigiriskdolibarr
             if ($serviceId <= 0) {
                 return 0;
             }
+
+            require_once __DIR__ . '/digiriskelement.class.php';
 
             $digiriskelement = new DigiriskElement($db);
             $res = $digiriskelement->fetch($serviceId);

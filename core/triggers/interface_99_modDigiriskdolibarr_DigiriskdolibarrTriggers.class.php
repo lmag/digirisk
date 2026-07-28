@@ -116,7 +116,7 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
 
         // Allowed triggers are a list of trigger from other module that should activate this file
 		if (!isModEnabled('digiriskdolibarr') || !$active) {
-			$allowedTriggers = ['COMPANY_DELETE', 'CONTACT_DELETE', 'TICKET_CREATE', 'TICKET_PUBLIC_INTERFACE_CREATE', 'TICKET_SIGN'];
+			$allowedTriggers = ['COMPANY_DELETE', 'CONTACT_DELETE', 'TICKET_CREATE', 'TICKET_PUBLIC_INTERFACE_CREATE', 'TICKET_SIGN', 'SATURNE_SIGNATURE_SIGN', 'SATURNE_SIGNATURE_SIGN_PUBLIC'];
             if (!in_array($action, $allowedTriggers)) {
                 return 0;  // If module is not enabled or trigger is deactivated, we do nothing
             }
@@ -235,6 +235,13 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
             case 'TICKETDOCUMENT_GENERATE' :
             case 'WORKUNITDOCUMENT_GENERATE' :
 
+                // Enquete accident : le document doit etre lisible par les personnes de la
+                // diffusion, qui n'ont pas de compte. On le rattache a l'enquete elle-meme et on
+                // lui pose une cle de partage, sinon la page publique ne peut ni le trouver ni le servir.
+                if ($action == 'ACCIDENTINVESTIGATIONDOCUMENT_GENERATE') {
+                    $this->shareGeneratedDocument($object, 'digiriskdolibarr_accident_investigation', $user);
+                }
+
                 if ($object->parent_type == 'groupment' || $object->parent_type == 'workunit' || preg_match('/listingrisks/', $object->parent_type)) {
                     $object->parent_type = 'digiriskelement';
                 }
@@ -318,6 +325,15 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
 
 				$result = $actioncomm->create($user);
 				break;
+
+            // Une signature change le document : sans regeneration, la diffusion continue de
+            // presenter une version datee a des gens qui n'ont aucun moyen de s'en apercevoir.
+            case 'SATURNE_SIGNATURE_SIGN' :
+            case 'SATURNE_SIGNATURE_SIGN_PUBLIC' :
+                if ($object->object_type == 'preventionplan' && $object->fk_object > 0) {
+                    $this->refreshPreventionPlanDocument((int) $object->fk_object, $user, $langs);
+                }
+                break;
 
             case 'ACCIDENT_ARCHIVE':
             case 'ACCIDENTINVESTIGATION_ARCHIVE' :
@@ -911,4 +927,157 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
 //		}
 		return 0;
 	}
+
+    /**
+     * Regenere le document PDF d'un plan de prevention et le remet a disposition de la diffusion.
+     *
+     * Remplace la version precedente au lieu de s'empiler avec elle : la page publique affiche
+     * tous les fichiers partages, deux PDF y seraient illisibles.
+     *
+     * @param  int       $planId Identifiant du plan de prevention
+     * @param  User      $user   Utilisateur a l'origine de l'action
+     * @param  Translate $langs  Objet de traduction
+     * @return void
+     */
+    protected function refreshPreventionPlanDocument(int $planId, User $user, Translate $langs)
+    {
+        global $conf;
+
+        require_once DOL_DOCUMENT_ROOT . '/ecm/class/ecmfiles.class.php';
+        require_once DOL_DOCUMENT_ROOT . '/core/lib/files.lib.php';
+        require_once DOL_DOCUMENT_ROOT . '/core/lib/security2.lib.php';
+        dol_include_once('/digiriskdolibarr/class/preventionplan.class.php');
+        dol_include_once('/digiriskdolibarr/class/digiriskdolibarrdocuments/preventionplandocument.class.php');
+
+        $plan = new PreventionPlan($this->db);
+        if ($plan->fetch($planId) <= 0) {
+            return;
+        }
+
+        // La page publique de signature tourne dans la langue de son visiteur : quand l'entite a
+        // une langue fixee, le document la garde, sinon la signature d'un intervenant etranger
+        // regenererait le plan dans sa langue a lui, pour tout le monde. Avec MAIN_LANG_DEFAULT a
+        // 'auto' il n'y a pas de langue de reference : on ne peut que suivre la requete courante.
+        $outputLangs = $langs;
+        $defaultLang = getDolGlobalString('MAIN_LANG_DEFAULT');
+        if (!empty($defaultLang) && $defaultLang != 'auto' && $defaultLang != $langs->defaultlang) {
+            $outputLangs = new Translate('', $conf);
+            $outputLangs->setDefaultLang($defaultLang);
+        }
+
+        $documentDir = $plan->element . 'document/' . dol_sanitizeFileName($plan->ref);
+        // Le chemin indexe dans llx_ecm_files est relatif a DOL_DATA_ROOT, et le multicompany
+        // intercale le numero d'entite : le deduire de dir_output plutot que de le coder en dur,
+        // sinon on cible le repertoire d'une autre entite
+        $relativeDir = trim(str_replace(DOL_DATA_ROOT, '', $conf->digiriskdolibarr->dir_output), '/') . '/' . $documentDir;
+
+        // On genere avant de supprimer : une generation en echec laisserait sinon le plan sans
+        // aucun document, alors que la diffusion est deja en ligne
+        $document   = new PreventionPlanDocument($this->db);
+        $moreParams = ['object' => $plan, 'user' => $user, 'objectType' => $plan->element];
+        if ($document->generateDocument('preventionplandocument', $outputLangs, 0, 0, 0, $moreParams) <= 0) {
+            dol_syslog('refreshPreventionPlanDocument : ' . $document->error, LOG_WARNING);
+            return;
+        }
+
+        $newFileName = basename($document->last_main_doc);
+
+        // Anciennes generations : on ne touche qu'au repertoire du modele, jamais aux pieces
+        // jointes deposees a la main sur le plan
+        $previous = new EcmFiles($this->db);
+        $previous->fetchAll('', '', 0, 0, '(t.filepath:=:\'' . $this->db->escape($relativeDir) . '\')');
+        if (is_array($previous->lines)) {
+            foreach ($previous->lines as $previousFile) {
+                if ($previousFile->filename == $newFileName) {
+                    continue;
+                }
+                $oldFile = new EcmFiles($this->db);
+                if ($oldFile->fetch($previousFile->id) > 0) {
+                    $oldFile->delete($user);
+                }
+                // disableglob : le nom porte la raison sociale, dont les crochets seraient pris
+                // pour une classe de caracteres et laisseraient le fichier sur le disque
+                dol_delete_file($conf->digiriskdolibarr->dir_output . '/' . $documentDir . '/' . $previousFile->filename, 1, 1);
+            }
+        }
+
+        // Rattachement au plan + cle de partage + favori : les trois conditions pour que la page
+        // publique trouve le document et l'affiche en apercu
+        if ($this->shareGeneratedFile($newFileName, $plan->table_element, $plan->id, $user, true) < 0) {
+            dol_syslog('refreshPreventionPlanDocument : partage impossible pour ' . $newFileName, LOG_WARNING);
+        }
+    }
+
+    /**
+     * Rattache le dernier document genere a son objet parent et lui pose une cle de partage.
+     *
+     * La generation indexe le fichier sur le document Saturne (src_object_type =
+     * saturne_object_documents). La page publique de diffusion, elle, cherche les fichiers de
+     * l'objet metier et ne sert que ceux qui portent une cle de partage : sans ce recalage le
+     * document reste invisible pour les personnes diffusees.
+     *
+     * @param  SaturneDocuments $document     Document genere
+     * @param  string           $tableElement Table de l'objet metier a rattacher
+     * @param  User             $user         Utilisateur a l'origine de l'action
+     * @return int                            < 0 si KO, 1 si OK
+     */
+    protected function shareGeneratedDocument($document, string $tableElement, User $user): int
+    {
+        if (empty($document->last_main_doc) || empty($document->parent_id)) {
+            return -1;
+        }
+
+        // last_main_doc ne porte que le nom du fichier et le repertoire est celui de l'objet
+        // parent, pas du document : on retrouve la ligne indexee par son nom de fichier
+        return $this->shareGeneratedFile(basename($document->last_main_doc), $tableElement, (int) $document->parent_id, $user);
+    }
+
+    /**
+     * Recale un fichier indexe sur l'objet metier voulu et lui pose une cle de partage.
+     *
+     * @param  string $fileName     Nom du fichier indexe
+     * @param  string $tableElement Table de l'objet metier a rattacher
+     * @param  int    $objectId     Identifiant de l'objet metier
+     * @param  User   $user         Utilisateur a l'origine de l'action
+     * @param  bool   $favorite     Marquer le fichier comme mis en avant sur la diffusion
+     * @return int                  < 0 si KO, 1 si OK
+     */
+    protected function shareGeneratedFile(string $fileName, string $tableElement, int $objectId, User $user, bool $favorite = false): int
+    {
+        global $conf;
+
+        require_once DOL_DOCUMENT_ROOT . '/ecm/class/ecmfiles.class.php';
+        require_once DOL_DOCUMENT_ROOT . '/core/lib/security2.lib.php';
+
+        // Requete directe plutot que le filtre universel de fetchAll : le nom de fichier porte la
+        // raison sociale, dont une parenthese ou une apostrophe casserait l'analyse du filtre.
+        // L'entite est indispensable, deux entites pouvant heberger un fichier de meme nom.
+        $sql  = 'SELECT rowid FROM ' . MAIN_DB_PREFIX . 'ecm_files';
+        $sql .= ' WHERE filename = \'' . $this->db->escape($fileName) . '\'';
+        $sql .= ' AND entity = ' . (int) $conf->entity;
+        $sql .= ' ORDER BY rowid DESC LIMIT 1';
+
+        $resql = $this->db->query($sql);
+        if (!$resql || $this->db->num_rows($resql) == 0) {
+            return -1;
+        }
+        $found = $this->db->fetch_object($resql);
+
+        $ecmFile = new EcmFiles($this->db);
+        if ($ecmFile->fetch($found->rowid) <= 0) {
+            return -1;
+        }
+
+        $ecmFile->src_object_type = $tableElement;
+        $ecmFile->src_object_id   = $objectId;
+        if (empty($ecmFile->share)) {
+            $ecmFile->share = getRandomPassword(true);
+        }
+        if ($favorite) {
+            // update() enregistre lui-meme les extrafields
+            $ecmFile->array_options['options_favorite'] = 1;
+        }
+
+        return $ecmFile->update($user) > 0 ? 1 : -1;
+    }
 }

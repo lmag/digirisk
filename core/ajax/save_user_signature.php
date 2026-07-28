@@ -41,7 +41,8 @@ if (empty($user->id)) {
     exit;
 }
 
-if (!$user->hasRight('digiriskdolibarr', 'mobilepreventionplan', 'write')) {
+// The reusable electronic signature is saved from either mobile interface.
+if (!$user->hasRight('digiriskdolibarr', 'preventionplan', 'write') && !$user->hasRight('digiriskdolibarr', 'firepermit', 'write')) {
     echo json_encode(['success' => false, 'error' => 'Forbidden']);
     exit;
 }

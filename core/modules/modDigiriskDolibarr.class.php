@@ -346,6 +346,11 @@ class modDigiriskdolibarr extends DolibarrModules
 	public $dictionaries = [];
 
 	/**
+	 * @var bool Whether the Saturne module files are available on the filesystem.
+	 */
+	public $saturneAvailable;
+
+	/**
 	 * Constructor. Define names, constants, directories, boxes, permissions
 	 *
 	 * @param DoliDB $db Database handler
@@ -356,7 +361,9 @@ class modDigiriskdolibarr extends DolibarrModules
 
 		$this->db = $db;
 
-		if (file_exists(__DIR__ . '/../../../saturne/lib/saturne_functions.lib.php')) {
+		$this->saturneAvailable = file_exists(__DIR__ . '/../../../saturne/lib/saturne_functions.lib.php');
+
+		if ($this->saturneAvailable) {
 			require_once __DIR__ . '/../../../saturne/lib/saturne_functions.lib.php';
 			saturne_load_langs(['digiriskdolibarr@digiriskdolibarr']);
 		} else {
@@ -880,6 +887,7 @@ class modDigiriskdolibarr extends DolibarrModules
             $i++ => ['DIGIRISKDOLIBARR_MAIN_AGENDA_ACTIONAUTO_ACCIDENTINVESTIGATION_SENTBYMAIL', 'integer', 1, '', 0, 'current'],
 
 			// CONST ACCIDENT INVESTIGATION DOCUMENT
+			$i++ => ['DIGIRISKDOLIBARR_MAIN_AGENDA_ACTIONAUTO_ACCIDENTINVESTIGATIONDOCUMENT_GENERATE', 'integer', 1, '', 0, 'current'],
 			$i++ => ['DIGIRISKDOLIBARR_ACCIDENTINVESTIGATIONDOCUMENT_ADDON', 'chaine', 'mod_accidentinvestigationdocument_standard', '', 0, 'current'],
 			$i++ => ['DIGIRISKDOLIBARR_ACCIDENTINVESTIGATIONDOCUMENT_ADDON_ODT_PATH','chaine', 'DOL_DOCUMENT_ROOT/custom/digiriskdolibarr/documents/doctemplates/accidentinvestigationdocument/', '', 0, 'current'],
 			$i++ => ['DIGIRISKDOLIBARR_ACCIDENTINVESTIGATIONDOCUMENT_CUSTOM_ADDON_ODT_PATH', 'chaine', 'DOL_DATA_ROOT' . (($conf->entity == 1 ) ? '/' : '/' . $conf->entity . '/') . 'ecm/digiriskdolibarr/accidentinvestigationdocument/', '', 0, 'current'],
@@ -914,7 +922,8 @@ class modDigiriskdolibarr extends DolibarrModules
                 MAIN_DB_PREFIX . 'c_digiriskdolibarr_action_trigger',
                 MAIN_DB_PREFIX . 'c_accidentinvestigation_attendants_role',
                 MAIN_DB_PREFIX . 'c_preventionplan_attendants_role',
-                MAIN_DB_PREFIX . 'c_firepermit_attendants_role'
+                MAIN_DB_PREFIX . 'c_firepermit_attendants_role',
+                MAIN_DB_PREFIX . 'c_digiriskdolibarr_certification'
             ],
             // Label of tables
             'tablib' => [
@@ -925,7 +934,8 @@ class modDigiriskdolibarr extends DolibarrModules
                 'DigiriskDolibarrActionTrigger',
                 'AccidentInvestigationRole',
                 'PreventionPlanRole',
-                'FirePermitRole'
+                'FirePermitRole',
+                'CertificationDictionary'
             ],
             // Request to select fields
             'tabsql' => [
@@ -936,11 +946,13 @@ class modDigiriskdolibarr extends DolibarrModules
                 'SELECT f.rowid as rowid, f.elementtype, f.ref, f.label, f.description, f.position, f.active FROM ' . MAIN_DB_PREFIX . 'c_digiriskdolibarr_action_trigger as f',
                 'SELECT f.rowid as rowid, f.ref, f.label, f.description, f.position, f.active FROM ' . MAIN_DB_PREFIX . 'c_accidentinvestigation_attendants_role as f',
                 'SELECT f.rowid as rowid, f.ref, f.label, f.description, f.position, f.active FROM ' . MAIN_DB_PREFIX . 'c_preventionplan_attendants_role as f',
-                'SELECT f.rowid as rowid, f.ref, f.label, f.description, f.position, f.active FROM ' . MAIN_DB_PREFIX . 'c_firepermit_attendants_role as f'
+                'SELECT f.rowid as rowid, f.ref, f.label, f.description, f.position, f.active FROM ' . MAIN_DB_PREFIX . 'c_firepermit_attendants_role as f',
+                'SELECT f.rowid as rowid, f.ref, f.label, f.description, f.position, f.active FROM ' . MAIN_DB_PREFIX . 'c_digiriskdolibarr_certification as f'
             ],
             // Sort order
             'tabsqlsort' => [
                 'code ASC',
+                'position ASC',
                 'position ASC',
                 'position ASC',
                 'position ASC',
@@ -994,10 +1006,12 @@ class modDigiriskdolibarr extends DolibarrModules
                 'rowid',
                 'rowid',
                 'rowid',
+                'rowid',
                 'rowid'
             ],
             // Condition to show each dictionary
             'tabcond' => [
+                !empty($conf->digiriskdolibarr->enabled),
                 !empty($conf->digiriskdolibarr->enabled),
                 !empty($conf->digiriskdolibarr->enabled),
                 !empty($conf->digiriskdolibarr->enabled),
@@ -1396,12 +1410,8 @@ class modDigiriskdolibarr extends DolibarrModules
 		$this->rights[$r][5] = 'categoryconfig';
 		$r++;
 
-		/* MOBILE PREVENTION PLAN QUICK CREATION PERMISSIONS - appended at the end to avoid renumbering existing permission ids */
-		$this->rights[$r][0] = $this->numero . sprintf('%02d', $r + 1);
-		$this->rights[$r][1] = $langs->transnoentities('CreateObjects', $langs->transnoentities('MobilePreventionPlanMin'));
-		$this->rights[$r][4] = 'mobilepreventionplan';
-		$this->rights[$r][5] = 'write';
-		$r++;
+		// The mobile interfaces and the application create the very same objects as the classic cards:
+		// they rely on preventionplan/write and firepermit/write rather than on rights of their own.
 
 		// Main menu entries to add
 		$this->menu       = [];
@@ -1572,7 +1582,7 @@ class modDigiriskdolibarr extends DolibarrModules
 			'langs'    => 'digiriskdolibarr@digiriskdolibarr',
 			'position' => 100 + $r,
 			'enabled'  => 'isModEnabled(\'digiriskdolibarr\')',
-			'perms'    => '$user->rights->digiriskdolibarr->mobilepreventionplan->write',
+			'perms'    => '$user->rights->digiriskdolibarr->preventionplan->write',
 			'target'   => '',
 			'user'     => 2,
 		];
@@ -1593,6 +1603,22 @@ class modDigiriskdolibarr extends DolibarrModules
         ];
 
 		$this->menu[$r++] = [
+			'fk_menu'  => 'fk_mainmenu=digiriskdolibarr',
+			'type'     => 'left',
+			'titre'    => $langs->transnoentities('PwaApplication'),
+			'prefix'   => '<i class="fas fa-mobile-alt pictofixedwidth"></i>',
+			'mainmenu' => 'digiriskdolibarr',
+			'leftmenu' => 'digiriskdolibarr_pwa',
+			'url'      => '/digiriskdolibarr/view/frontend/pwa_home.php',
+			'langs'    => 'digiriskdolibarr@digiriskdolibarr',
+			'position' => 100 + $r,
+			'enabled'  => 'isModEnabled(\'digiriskdolibarr\')',
+			'perms'    => '$user->rights->digiriskdolibarr->preventionplan->read || $user->rights->digiriskdolibarr->firepermit->read',
+			'target'   => '',
+			'user'     => 2,
+		];
+
+		$this->menu[$r++] = [
 			'fk_menu'  => 'fk_mainmenu=digiriskdolibarr',	    // '' if this is a top menu. For left menu, use 'fk_mainmenu=xxx' or 'fk_mainmenu=xxx,fk_leftmenu=yyy' where xxx is mainmenucode and yyy is a leftmenucode
 			'type'     => 'left',			                // This is a Left menu entry
 			'titre'    => $langs->trans('FirePermit'),
@@ -1606,6 +1632,21 @@ class modDigiriskdolibarr extends DolibarrModules
 			'perms'    => '$user->rights->digiriskdolibarr->firepermit->read', // Use 'perms'=>'$user->rights->digiriskdolibarr->level1->level2' if you want your menu with a permission rules
 			'target'   => '',
 			'user'     => 0,				                // 0=Menu for internal users, 1=external users, 2=both
+		];
+
+		$this->menu[$r++] = [
+			'fk_menu'  => 'fk_mainmenu=digiriskdolibarr,fk_leftmenu=digiriskfirepermit',
+			'type'     => 'left',
+			'titre'    => '<i class="fas fa-mobile-alt pictofixedwidth"></i>' . $langs->transnoentities('MobileQuickCreation'),
+			'mainmenu' => 'digiriskdolibarr',
+			'leftmenu' => 'digiriskdolibarr_firepermitmobile',
+			'url'      => '/digiriskdolibarr/view/firepermit/firepermit_mobile_create.php',
+			'langs'    => 'digiriskdolibarr@digiriskdolibarr',
+			'position' => 100 + $r,
+			'enabled'  => 'isModEnabled(\'digiriskdolibarr\')',
+			'perms'    => '$user->rights->digiriskdolibarr->firepermit->write',
+			'target'   => '',
+			'user'     => 2,
 		];
 
         $this->menu[$r++] = [
@@ -1909,6 +1950,11 @@ class modDigiriskdolibarr extends DolibarrModules
 		$this->export_sql_end[$r] .= ' WHERE cat.entity IN ('.getEntity('category').')';
 		$this->export_sql_end[$r] .= ' AND cat.type = 12';
 
+        // Export and import profiles below load Digirisk classes that all extend SaturneObject : without Saturne they raise an uncatchable fatal error that breaks the whole module list page.
+        if (!$this->saturneAvailable) {
+            return;
+        }
+
         $objectMetaDatas = [
             'digiriskelement'       => ['langs' => 'DigiriskElement',       'picto' => 'fontawesome_fa-network-wired_fas_#d35968'],
             'risk'                  => ['langs' => 'Risk',                  'picto' => 'fontawesome_fa-exclamation-triangle_fas_#d35968', 'classPath' => 'riskanalysis'],
@@ -2106,6 +2152,12 @@ class modDigiriskdolibarr extends DolibarrModules
 
 		$langs->load("digiriskdolibarr@digiriskdolibarr");
 
+        // Digirisk cannot run without the Saturne framework : refuse the activation instead of breaking every page of the Dolibarr instance.
+        if (!$this->saturneAvailable) {
+            $this->error = $langs->trans('SaturneModuleMissing');
+            return 0;
+        }
+
         if (empty($conf->global->DIGIRISKDOLIBARR_ACCIDENT_REMOVE_FK_USER_VICTIM)) {
 
             require_once __DIR__ . '/../../class/accident.class.php';
@@ -2168,6 +2220,7 @@ class modDigiriskdolibarr extends DolibarrModules
 		addDocumentModel('legaldisplay_odt', 'legaldisplay', 'ODT templates', 'DIGIRISKDOLIBARR_LEGALDISPLAY_ADDON_ODT_PATH');
 		addDocumentModel('firepermitdocument_odt', 'firepermitdocument', 'ODT templates', 'DIGIRISKDOLIBARR_FIREPERMITDOCUMENT_ADDON_ODT_PATH');
 		addDocumentModel('preventionplandocument_odt', 'preventionplandocument', 'ODT templates', 'DIGIRISKDOLIBARR_PREVENTIONPLANDOCUMENT_ADDON_ODT_PATH');
+        addDocumentModel('preventionplandocument', 'preventionplandocument', $langs->transnoentities('PreventionPlanDocumentPDF'));
 		addDocumentModel('preventionplandocument_specimen_odt', 'preventionplandocumentspecimen', 'ODT templates', 'DIGIRISKDOLIBARR_PREVENTIONPLANDOCUMENT_SPECIMEN_ADDON_ODT_PATH');
 		addDocumentModel('groupmentdocument_odt', 'groupmentdocument', 'ODT templates', 'DIGIRISKDOLIBARR_GROUPMENTDOCUMENT_ADDON_ODT_PATH');
 		addDocumentModel('groupmentdocument', 'groupmentdocument', 'Fiche de Groupement PDF', '');
@@ -2187,6 +2240,7 @@ class modDigiriskdolibarr extends DolibarrModules
         addDocumentModel('ticketdocument', 'ticketdocument', $langs->transnoentities('TicketDocumentPDF'));
 		addDocumentModel('papripact_a3_paysage_projectdocument', 'project', 'PAPRIPACT-A3-PAYSAGE');
         addDocumentModel('accidentinvestigationdocument_odt', 'accidentinvestigationdocument', 'ODT templates', 'DIGIRISKDOLIBARR_ACCIDENTINVESTIGATIONDOCUMENT_ADDON_ODT_PATH');
+        addDocumentModel('accidentinvestigationdocument', 'accidentinvestigationdocument', $langs->transnoentities('AccidentInvestigationDocumentPDF'));
         addDocumentModel('registerdocument_odt', 'registerdocument', 'ODT templates', 'DIGIRISKDOLIBARR_REGISTERDOCUMENT_ADDON_ODT_PATH');
 
 		// The entity conf may have been cloned from another entity (multicompany): the constants can point
@@ -2469,8 +2523,9 @@ class modDigiriskdolibarr extends DolibarrModules
 
 			'ticket_categories' => ['Label' => 'Categories', 'type' => 'text', 'elementtype' => ['ticket'], 'position' => 1, 'list' => 2, 'enabled' => "isModEnabled('digiriskdolibarr') && isModEnabled('categorie') && isModEnabled('ticket')", 'moreparams' => []],
 
-			'mobile_protections'   => ['Label' => 'MobileProtections',   'type' => 'text', 'elementtype' => ['digiriskdolibarr_preventionplan'], 'position' => $this->numero . 10, 'list' => 0, 'enabled' => "isModEnabled('digiriskdolibarr')", 'moreparams' => []],
-			'mobile_certifications' => ['Label' => 'MobileCertifications', 'type' => 'text', 'elementtype' => ['digiriskdolibarr_preventionplan'], 'position' => $this->numero . 11, 'list' => 0, 'enabled' => "isModEnabled('digiriskdolibarr')", 'moreparams' => []]
+			'mobile_protections'   => ['Label' => 'MobileProtections',   'type' => 'text', 'elementtype' => ['digiriskdolibarr_preventionplan', 'digiriskdolibarr_firepermit'], 'position' => $this->numero . 10, 'list' => 0, 'enabled' => "isModEnabled('digiriskdolibarr')", 'moreparams' => []],
+			'mobile_certifications' => ['Label' => 'MobileCertifications', 'type' => 'text', 'elementtype' => ['digiriskdolibarr_preventionplan', 'digiriskdolibarr_firepermit'], 'position' => $this->numero . 11, 'list' => 0, 'enabled' => "isModEnabled('digiriskdolibarr')", 'moreparams' => []],
+			'mobile_risk_companies' => ['Label' => 'MobileRiskCompanies', 'type' => 'text', 'elementtype' => ['digiriskdolibarr_preventionplan'], 'position' => $this->numero . 12, 'list' => 0, 'enabled' => "isModEnabled('digiriskdolibarr')", 'moreparams' => []]
 		];
 
         saturne_manage_extrafields($extraFieldsArrays, $commonExtraFieldsValue);

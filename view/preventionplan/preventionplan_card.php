@@ -1462,24 +1462,97 @@ if ((empty($action) || ($action != 'create' && $action != 'edit'))) {
 		}
 		print '</table>';
 		} else {
-			// Read-only risk list, styled like the protections block for theme consistency
+			// Read-only risk list, styled like the protections block for theme consistency.
+			// Each risk shows what the mobile interface captured for it: photos and protections (EPI).
 			if (is_array($preventionplandets) && !empty($preventionplandets)) {
-				print '<div class="preventionplan-protections-view__list">';
+				require_once __DIR__ . '/../../lib/digiriskdolibarr_mobile.lib.php';
+
+				$mobileRiskProtections = !empty($object->array_options['options_mobile_protections'])    ? json_decode($object->array_options['options_mobile_protections'], true)    : [];
+				$mobileRiskCompanies   = !empty($object->array_options['options_mobile_risk_companies']) ? json_decode($object->array_options['options_mobile_risk_companies'], true) : [];
+				$signalisationFile     = DOL_DOCUMENT_ROOT . '/custom/digiriskdolibarr/js/json/signalisationCategories.json';
+				$signalisationMap      = [];
+				if (file_exists($signalisationFile)) {
+					foreach ((json_decode(file_get_contents($signalisationFile), true) ?: []) as $signalisationItem) {
+						$signalisationMap[$signalisationItem['position']] = $signalisationItem;
+					}
+				}
+
+				print '<div class="div-table-responsive-no-min">';
+				print '<table class="noborder centpercent">';
+				print '<tr class="liste_titre">';
+				print '<td>' . $langs->trans('INRSRisk') . '</td>';
+				print '<td>' . $langs->trans('Description') . '</td>';
+				print '<td class="center">' . $langs->trans('MobilePPConcernedCompanies') . '</td>';
+				print '<td>' . $langs->trans('MobilePPProtections') . '</td>';
+				print '<td>' . $langs->trans('Photos') . '</td>';
+				print '</tr>';
+
 				foreach ($preventionplandets as $riskLine) {
 					$riskThumb = $risk->getDangerCategory($riskLine);
 					$riskName  = $risk->getDangerCategoryName($riskLine);
-					print '<div class="preventionplan-protections-view__item">';
+
+					print '<tr class="oddeven">';
+
+					// Danger category: picto and name
+					print '<td class="nowraponall">';
 					if ($riskThumb != -1) {
-						print '<img src="' . DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $riskThumb . '.png" alt="" title="' . dol_escape_htmltag($riskName != -1 ? $riskName : '') . '">';
+						print '<img class="cell-risk-view__pic valignmiddle marginrightonly" src="' . DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $riskThumb . '.png" alt="" title="' . dol_escape_htmltag($riskName != -1 ? $riskName : '') . '">';
 					}
-					print '<div class="preventionplan-protections-view__info">';
-					print '<div class="preventionplan-protections-view__name">' . dol_escape_htmltag($riskName != -1 ? $riskName : $riskLine->ref) . '</div>';
-					if (dol_strlen($riskLine->description)) {
-						print '<div class="preventionplan-protections-view__comment">' . dol_escape_htmltag($riskLine->description) . '</div>';
+					print '<span class="valignmiddle">' . dol_escape_htmltag($riskName != -1 ? $riskName : $riskLine->ref) . '</span>';
+					print '</td>';
+
+					print '<td class="wordbreak">' . dol_escape_htmltag($riskLine->description) . '</td>';
+
+					// Which company the risk concerns, as captured by the mobile interface
+					print '<td class="center nowraponall">';
+					if (isset($mobileRiskCompanies[(string) $riskLine->category])) {
+						$riskCompanies = $mobileRiskCompanies[(string) $riskLine->category];
+						if (!empty($riskCompanies['eu'])) {
+							print '<span class="badge badge-info" title="' . dol_escape_htmltag($langs->trans('MobilePPUserCompany')) . '">' . $langs->trans('MobilePPUserCompanyShort') . '</span> ';
+						}
+						if (!empty($riskCompanies['ee'])) {
+							print '<span class="badge badge-info" title="' . dol_escape_htmltag($langs->trans('MobilePPExteriorCompany')) . '">' . $langs->trans('MobilePPExteriorCompanyShort') . '</span>';
+						}
+					} else {
+						print '<span class="opacitymedium">-</span>';
 					}
-					print '</div>';
-					print '</div>';
+					print '</td>';
+
+					// Protections (EPI) attached to this risk: pictos, the name is in the tooltip
+					print '<td class="nowraponall">';
+					$riskHasProtection = false;
+					if (is_array($mobileRiskProtections)) {
+						foreach ($mobileRiskProtections as $mobileRiskProtection) {
+							if (!isset($mobileRiskProtection['risk_category']) || (int) $mobileRiskProtection['risk_category'] !== (int) $riskLine->category || !isset($signalisationMap[$mobileRiskProtection['position']])) {
+								continue;
+							}
+							$protectionCategory = $signalisationMap[$mobileRiskProtection['position']];
+							$protectionTitle    = $protectionCategory['name'] . (dol_strlen($mobileRiskProtection['comment'] ?? '') ? ' - ' . $mobileRiskProtection['comment'] : '');
+							print '<img class="cell-risk-view__pic marginrightonly" src="' . DOL_URL_ROOT . '/custom/digiriskdolibarr/img/' . $protectionCategory['name_thumbnail'] . '" alt="" title="' . dol_escape_htmltag($protectionTitle) . '">';
+							$riskHasProtection = true;
+						}
+					}
+					if (!$riskHasProtection) {
+						print '<span class="opacitymedium">-</span>';
+					}
+					print '</td>';
+
+					// Photos taken on site from the mobile interface
+					print '<td class="nowraponall">';
+					$riskPhotos = digiriskMobileGetRiskPhotos($object->element, $object->ref, (int) $riskLine->category);
+					if (!empty($riskPhotos)) {
+						foreach ($riskPhotos as $riskPhoto) {
+							// attachment=0 : document.php affiche l'image dans l'onglet au lieu de la telecharger
+							print '<a href="' . $riskPhoto['url'] . '&attachment=0" target="_blank"><img class="digirisk-risk-list-photo marginrightonly" src="' . $riskPhoto['url'] . '" alt=""></a>';
+						}
+					} else {
+						print '<span class="opacitymedium">-</span>';
+					}
+					print '</td>';
+
+					print '</tr>';
 				}
+				print '</table>';
 				print '</div>';
 			} else {
 				print '<span class="opacitymedium">' . $langs->trans('None') . '</span>';
@@ -1488,67 +1561,8 @@ if ((empty($action) || ($action != 'create' && $action != 'edit'))) {
 		print '</div>';
 	}
 
-	// Protections (EPI) captured from the mobile quick-creation interface
-	$object->fetch_optionals();
-	$mobileProtections = !empty($object->array_options['options_mobile_protections']) ? json_decode($object->array_options['options_mobile_protections'], true) : [];
-	if (is_array($mobileProtections) && !empty($mobileProtections)) {
-		$signalisationFile       = DOL_DOCUMENT_ROOT . '/custom/digiriskdolibarr/js/json/signalisationCategories.json';
-		$signalisationCategories = file_exists($signalisationFile) ? json_decode(file_get_contents($signalisationFile), true) : [];
-		$protectionMap           = [];
-		if (is_array($signalisationCategories)) {
-			foreach ($signalisationCategories as $signalisationCategory) {
-				$protectionMap[$signalisationCategory['position']] = $signalisationCategory;
-			}
-		}
-
-		print '<div class="preventionplan-protections-view">';
-		print '<div class="preventionplan-protections-view__title"><i class="fas fa-hard-hat"></i> ' . $langs->trans('MobilePPProtections') . '</div>';
-		print '<div class="preventionplan-protections-view__list">';
-		foreach ($mobileProtections as $mobileProtection) {
-			if (!isset($protectionMap[$mobileProtection['position']])) {
-				continue;
-			}
-			$protectionCategory = $protectionMap[$mobileProtection['position']];
-			$thumb              = DOL_URL_ROOT . '/custom/digiriskdolibarr/img/' . $protectionCategory['name_thumbnail'];
-			print '<div class="preventionplan-protections-view__item">';
-			print '<img src="' . $thumb . '" alt="" title="' . dol_escape_htmltag($protectionCategory['name']) . '">';
-			print '<div class="preventionplan-protections-view__info">';
-			print '<div class="preventionplan-protections-view__name">' . dol_escape_htmltag($protectionCategory['name']) . '</div>';
-			if (!empty($mobileProtection['comment'])) {
-				print '<div class="preventionplan-protections-view__comment">' . dol_escape_htmltag($mobileProtection['comment']) . '</div>';
-			}
-			if (!empty($mobileProtection['mandatory'])) {
-				print '<span class="badge badge-info">' . $langs->trans('MobilePPMandatory') . '</span>';
-			}
-			print '</div>';
-			print '</div>';
-		}
-		print '</div>';
-		print '</div>';
-	}
-
-	// Required certifications captured from the mobile quick-creation interface
-	$mobileCertifications = !empty($object->array_options['options_mobile_certifications']) ? json_decode($object->array_options['options_mobile_certifications'], true) : [];
-	if (is_array($mobileCertifications) && !empty($mobileCertifications)) {
-		require_once __DIR__ . '/../../lib/digiriskdolibarr_mobile.lib.php';
-		$certificationOptions = digiriskGetCertificationOptions();
-		print '<div class="preventionplan-protections-view">';
-		print '<div class="preventionplan-protections-view__title"><i class="fas fa-id-badge"></i> ' . $langs->trans('MobilePPCertifications') . '</div>';
-		print '<div class="preventionplan-protections-view__list">';
-		foreach ($mobileCertifications as $mobileCertification) {
-			$certLabel = isset($certificationOptions[$mobileCertification['code']]) ? $certificationOptions[$mobileCertification['code']] : $mobileCertification['code'];
-			print '<div class="preventionplan-protections-view__item">';
-			print '<div class="preventionplan-protections-view__info">';
-			print '<div class="preventionplan-protections-view__name">' . dol_escape_htmltag($certLabel) . '</div>';
-			if (!empty($mobileCertification['mandatory'])) {
-				print '<span class="badge badge-info">' . $langs->trans('MobilePPMandatory') . '</span>';
-			}
-			print '</div>';
-			print '</div>';
-		}
-		print '</div>';
-		print '</div>';
-	}
+	// Protections (EPI) and required certifications captured from the mobile quick-creation interface
+	require __DIR__ . "/../../core/tpl/digiriskdolibarr_mobile_protections_view.tpl.php";
 
 	// Document Generation -- Génération des documents
 	if ($permissiontoadd) {

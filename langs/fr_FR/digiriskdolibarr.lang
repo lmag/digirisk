@@ -23,6 +23,12 @@ ModuleDigiriskdolibarrName = Digirisk
 # Module description 'ModuleDigiriskdolibarrDesc'
 ModuleDigiriskdolibarrDesc = Digirisk pour Dolibarr
 
+# Module Saturne manquant
+SaturneModuleMissing = Le module Saturne est requis par Digirisk. Téléchargez-le gratuitement sur le Dolistore (https://dolistore.com/fr/modules/1906-Saturne.html) et installez-le avant d'activer Digirisk.
+
+# Colonne des images tuto des pages de configuration
+TutoImage = Image
+
 #
 # Page d'administration
 #
@@ -615,6 +621,13 @@ DigiriskActionType                       = Type d'action Digirisk
 Actions                                  = Actions
 ActionsTab                               = Actions
 CurativeActions                          = Actions curatives
+PreventiveActions                        = Actions préventives
+TotalPlannedBudget                       = Budget prévu
+AccidentInvestigationDocumentPDF         = EA-A4-PORTRAIT
+PreventionPlanDocumentPDF                = PP-A4-PORTRAIT
+PreventionPlanDocumentPDFDescription     = Generer le plan de prevention en PDF
+AccidentInvestigationDocumentPDFDescription = Générer l'enquête accident en PDF
+AccidentInvestigationDocumentGeneratedAt = Généré le
 CorrectiveActions                        = Actions correctives
 AddCurativeAction                        = Ajouter une action curative
 AddCorrectiveAction                      = Ajouter une action corrective
@@ -1598,6 +1611,8 @@ DataMigrationImportGlobal                    = Importation des données globales
 DataMigrationImportGlobalDescription         = Importation des données globales de Digirisk WordPress au format ZIP <br> (Arborescence, risques et signalisations)
 DataMigrationExportGlobal                    = Exportation des données globales de Digirisk <br> (Arborescence, risques et signalisations)
 DataMigrationExportGlobalDescription         = Exportation des données globales de Digirisk Dolibarr au format ZIP <br> (Arborescence, risques et signalisations)
+DataMigrationExportTree                      = Exportation de l'arborescence de Digirisk <br> (Arborescence uniquement)
+DataMigrationExportTreeDescription           = Exportation de l'arborescence de Digirisk Dolibarr au format ZIP <br> (GP/UT visibles de l'entité courante, sans les risques ni les signalisations)
 DataMigrationImportGlobalDolibarrDescription = Importation des données globales de Digirisk Dolibarr au format ZIP <br> (Arborescence, risques et signalisations)
 DataMigrationTreeAlreadyImported             = Importation des données de l'arborescence déjà réalisée
 DataMigrationRisksAlreadyImported            = Importation des données des risques déjà réalisée
@@ -1724,6 +1739,10 @@ ColumnGap                          = Espacement
 ActionPlanExportCsv                = Télécharger le PAPRIPACT au format CSV
 ActionPlanExportA3                 = Télécharger le PAPRIPACT en PDF A3 paysage
 ActionPlanExportGantt              = Télécharger le diagramme de Gantt en image PNG
+ActionPlanDisplayedProject         = Projet affiché
+ActionPlanChangeProject            = Changer de projet
+ActionPlanDefaultProject           = Document Unique (par défaut)
+ActionPlanNoProjectConfigured      = Aucun projet configuré
 
 # ActionPlan — ActionComm Logging
 ActionPlanLogging                  = Plan d'Action — Historique des modifications
@@ -1893,6 +1912,17 @@ TicketKanbanLogDeadlineDesc            = Créer un événement lorsque la date l
 TicketKanbanClosedLimit                = Limite tickets fermés
 TicketKanbanClosedLimitDesc            = Nombre maximum de tickets fermés/annulés affichés dans le kanban (0 = illimité)
 
+# ===========================================================================
+# Ticket — traçabilité des modifications — issue #4885
+# ===========================================================================
+TicketLogModifications                 = Traçabilité des modifications
+TicketLogModificationsDesc             = Créer un événement pour chaque édition faite depuis la fiche ticket (sujet, message, registres, assigné, tiers, projet, avancement, statut, tâches, documents)
+TicketMessageEdited                    = Message modifié
+TicketMessageDeleted                   = Message supprimé
+TicketTaskCreated                      = Tâche créée : %s
+TicketDocumentGenerated                = Document généré
+TicketFileDeleted                      = Fichier supprimé
+
 # Drawer de création rapide de ticket
 SelectNothing                          = — Sélectionner —
 QuickCreateTicket                      = Créer rapidement un ticket
@@ -1969,7 +1999,6 @@ Mentioned = Mentionné
 
 # Mobile prevention plan quick creation
 MobileQuickCreation = Création rapide mobile
-MobilePreventionPlanMin = plans de prévention via l'interface mobile
 MobilePPInteriorCompany = Entreprise utilisatrice (intérieure)
 MobilePPResponsibleAutoSign = Responsable (signe automatiquement)
 MobilePPSignatureSaved = Signature enregistrée
@@ -1978,7 +2007,8 @@ MobilePPDrawSignatureHint = Dessinez votre signature ci-dessous puis enregistrez
 MobilePPClearSignature = Effacer
 MobilePPSaveSignature = Enregistrer ma signature
 MobilePPExteriorCompany = Entreprise extérieure
-Siren = SIREN
+MobileSirenOrSiret = SIREN / SIRET
+MobileSirenOrSiretPlaceholder = 9 ou 14 chiffres
 MobilePPResponsibleToSign = Responsable à faire signer
 MobilePPChooseExistingContact = Choisir un contact existant
 MobilePPNewContact = Nouveau contact
@@ -1988,7 +2018,7 @@ MobilePPMaxOneYearHint = 1 an maximum entre la date de début et la date de fin.
 MobilePPSubmit = Créer le plan de prévention
 MobilePPErrorNoSignature = Vous devez enregistrer votre signature avant de créer le plan.
 MobilePPErrorEmptySignature = La signature est vide.
-MobilePPErrorInvalidSiren = SIREN invalide (9 chiffres attendus).
+MobilePPErrorInvalidSiren = SIREN ou SIRET invalide (9 ou 14 chiffres attendus).
 MobilePPErrorEndBeforeStart = La date de fin doit être postérieure à la date de début.
 MobilePPErrorMaxOneYear = La durée ne peut pas dépasser 1 an.
 MobilePPErrorDatesRequired = Renseignez la date de début et la date de fin.
@@ -2007,10 +2037,30 @@ MobilePPSuccessTitle = Plan de prévention créé
 MobilePPSuccessText = Le responsable intérieur a signé automatiquement. Une demande de signature a été envoyée à l'entreprise extérieure.
 MobilePPViewPlan = Voir le plan
 MobilePPCreateAnother = Créer un autre plan
+MobileSuccessInteriorSigned = Responsable intérieur : signé
+MobileSuccessExteriorNotified = Entreprise extérieure : demande de signature envoyée
+MobileSpreadShareTitle = Partager la diffusion
+MobileSpreadShareText = Faites scanner ce code aux personnes concernées. Sans compte ni connexion, elles renseignent leurs coordonnées, déposent leurs documents et signent.
+MobileSpreadOpen = Ouvrir la diffusion
 MobilePPRisks = Risques
 MobilePPAddRisk = Ajouter un risque
 MobilePPRiskModalTitle = Choisir un risque
 MobilePPRiskComment = Commentaire
+MobilePPRiskDescriptionPlaceholder = Décrire le risque sur le site
+MobilePPNoRiskYet = Aucun risque ajouté pour le moment.
+MobilePPDeleteRiskTitle = Supprimer le risque
+MobilePPDeleteRiskConfirm = « %s » va être retiré du plan, avec sa description, ses photos et ses protections.
+MobilePPUserCompany = Entreprise utilisatrice
+MobilePPUserCompanyShort = EU
+MobilePPConcernedCompanies = Concerne
+MobilePPExteriorCompanyShort = EE
+MobilePPPriorFormalities = Formalités préalables
+MobilePPPriorVisitDone = Inspection commune préalable effectuée
+MobilePPPriorVisitTextPlaceholder = Ce qui a été constaté pendant l'inspection
+MobileRiskCompanies = Entreprises concernées par les risques (mobile)
+CertificationDictionary = Certifications et habilitations
+MobilePPChooseExistingCompany = Choisir un tiers existant
+MobilePPOrFillManually = ou saisir les informations
 MobilePPProtections = Protections
 MobilePPAddProtection = Ajouter une protection
 MobilePPProtectionModalTitle = Choisir une protection
@@ -2020,3 +2070,67 @@ MobilePPCertifications = Certifications obligatoires
 MobilePPAddCertification = Ajouter une certification
 MobileCertifications = Certifications (mobile)
 MobilePPUploadCertPhoto = Envoyer une photo
+
+# Mobile fire permit quick creation
+MobileFPPreventionPlanHelp = L'entreprise extérieure et la période du plan sélectionné sont reprises automatiquement.
+MobileFPPeriod = Lieu et période des travaux
+MobileFPMaxOneMonthHint = Un mois maximum entre le début et la fin des travaux.
+MobileFPErrorMaxOneMonth = La durée ne peut pas dépasser un mois.
+MobileFPErrorNoProject = Aucun projet permis de feu par défaut n'est configuré.
+MobileFPWorkTypes = Types de travaux
+MobileFPAddWorkType = Ajouter un type de travaux
+MobileFPWorkTypeModalTitle = Choisir un type de travaux
+MobileFPSubmit = Créer le permis de feu
+MobileFPCreated = Permis de feu %s créé.
+MobileFPUpdated = Permis de feu %s mis à jour.
+MobileFPSignatureEmailSubject = Demande de signature du permis de feu %s
+MobileFPSignatureEmailContent = Bonjour,<br><br>Vous êtes invité à signer le permis de feu pour %s.<br><br><a href="%s">Cliquez ici pour signer</a><br><br>Cordialement.
+MobileFPSuccessTitle = Permis de feu créé
+MobileFPViewPermit = Voir le permis
+MobileFPCreateAnother = Créer un autre permis
+
+# Digirisk PWA
+PwaApplication = Application
+PwaNavHome = Accueil
+PwaNavPreventionPlans = Plans
+PwaNavFirePermits = Permis
+PwaNavMenu = Menu
+PwaNavFavoritesHint = Favoris affichés en bas (max %s)
+PwaNavAddFavorite = Ajouter aux favoris
+PwaNavRemoveFavorite = Retirer des favoris
+PwaHello = Bonjour %s
+PwaResultCount = %s résultat(s)
+PwaTilePreventionPlanInProgress = Plans en cours
+PwaTilePreventionPlanToSign = Plans à signer
+PwaTileFirePermitInProgress = Permis en cours
+PwaTileFirePermitToSign = Permis à signer
+
+# Actions de masse sur les tâches
+MassValidateTasks = Valider les tâches
+MassChangeTasksProject = Changer de projet
+ConfirmMassValidateTasksQuestion = Êtes-vous sûr de vouloir valider les %s tâche(s) sélectionnée(s) ? Seules les tâches au statut brouillon seront validées.
+ConfirmMassChangeTasksProjectQuestion = Êtes-vous sûr de vouloir rattacher les %s tâche(s) sélectionnée(s) au projet choisi ?
+MassValidateTasksSuccess = %s tâche(s) validée(s) sur %s sélectionnée(s)
+MassChangeTasksProjectSuccess = %s tâche(s) rattachée(s) au projet %s
+
+# Plan de prevention PDF
+PreventionPlanLegalNotice = Le plan de prévention est un document obligatoire visant à prévenir les risques liés à l'interférence entre les activités de plusieurs entreprises sur un même site, conformément à l'article R4512-7 du Code du travail.
+PreventionPlanUserCompany = Entreprise Utilisatrice - EU
+PreventionPlanExteriorCompany = Entreprise Extérieure - EE
+PreventionPlanUserCompanyResponsible = Responsable Entreprise Utilisatrice (EU)
+PreventionPlanExteriorCompanyResponsible = Responsable Entreprise Extérieure (EE)
+EmergencyNumbers = Numéros d'urgence
+Firefighters = Pompiers
+AnyEmergency = Toute urgence
+PriorVisitIntro = L'entreprise utilisatrice a procédé, préalablement à l'exécution de l'opération, à une inspection commune préalable en date du %s. Lors de cette visite les points suivants ont été présentés par l'Entreprise Utilisatrice (art. R. 4512-2 et R. 4512-3 du Code du travail) :
+PriorVisitCheckList = Lieux de travail|Installations qui s'y trouvent|Matériels éventuellement mis à disposition des entreprises extérieures|Délimiter le secteur de l'intervention des entreprises extérieures|Matérialiser les zones de ce secteur qui peuvent présenter des dangers pour les travailleurs|Indiquer les voies de circulation que pourront emprunter les travailleurs ainsi que les véhicules et engins de toute nature appartenant aux entreprises extérieures|Définir les voies d'accès des travailleurs aux locaux et installations à l'usage des EE (notamment les installations sanitaires, vestiaires collectifs et locaux de restauration)
+PriorVisitComments = Les commentaires suivants ont été relevés :
+InterventionPeriodSentence = Ce plan débute le %s et finit le %s. Les interventions se dérouleront aux horaires suivants :
+RiskAnalysisIntro = Vous avez prévu %s intervention(s) pour ce plan de prévention : ci-après le détail des actions prévues, les risques engendrés et les moyens de prévention mis en oeuvre.
+PreventionPlanAttendants = Intervenants : Entreprise Extérieure (EE) et sous-traitants
+Morning = Matin
+Afternoon = Après-midi
+Signatures = Signatures
+SignaturePending = En attente
+PreventionPlanRiskPhotos = Photos du risque
+InterventionPeriodOnly = Ce plan debute le %s et finit le %s.
