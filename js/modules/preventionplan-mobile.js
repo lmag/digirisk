@@ -106,6 +106,51 @@ window.digiriskdolibarr.preventionplanmobile.event = function() {
     $(document).on('click', '.digirisk-mobile-cert-add', window.digiriskdolibarr.preventionplanmobile.addCertification);
     $(document).on('click', '.digirisk-mobile-cert-item-delete', window.digiriskdolibarr.preventionplanmobile.removeCertification);
     $(document).on('submit', '.digirisk-mobile-form', window.digiriskdolibarr.preventionplanmobile.submitForm);
+    $(document).on('click', '.digirisk-mobile-extsign__resend', window.digiriskdolibarr.preventionplanmobile.resendExtSignatureEmail);
+};
+
+/**
+ * Send the signature link to the exterior company again from the success screen.
+ *
+ * The automatic email of the creation may have failed, or simply never reached its recipient: the
+ * button reports what happened instead of leaving the user guessing.
+ *
+ * @return {void}
+ */
+window.digiriskdolibarr.preventionplanmobile.resendExtSignatureEmail = function() {
+    var button = $(this);
+    var card   = button.closest('.digirisk-mobile-extsign');
+    var status = card.find('.digirisk-mobile-extsign__status');
+    var planId = card.data('plan-id');
+
+    if (button.hasClass('button-disable')) {
+        return;
+    }
+    button.addClass('button-disable');
+
+    $.ajax({
+        url: document.URL.split('#')[0] + (document.URL.indexOf('?') >= 0 ? '&' : '?') + 'action=resend_ext_signature_email&token=' + window.saturne.toolbox.getToken(),
+        type: 'POST',
+        data: { plan_id: planId },
+        success: function(resp) {
+            button.removeClass('button-disable');
+            if (!resp) {
+                return;
+            }
+            status
+                .removeClass('digirisk-mobile-extsign__status--pending digirisk-mobile-extsign__status--sent digirisk-mobile-extsign__status--error')
+                .addClass(resp.success ? 'digirisk-mobile-extsign__status--sent' : 'digirisk-mobile-extsign__status--error')
+                .find('span').text(resp.message || '');
+            status.find('i').attr('class', resp.success ? 'fas fa-paper-plane' : 'fas fa-exclamation-circle');
+        },
+        error: function(jqXHR) {
+            button.removeClass('button-disable');
+            status
+                .removeClass('digirisk-mobile-extsign__status--pending digirisk-mobile-extsign__status--sent')
+                .addClass('digirisk-mobile-extsign__status--error')
+                .find('span').text('KO (HTTP ' + jqXHR.status + ')');
+        }
+    });
 };
 
 /**
@@ -154,7 +199,9 @@ window.digiriskdolibarr.preventionplanmobile.saveSignature = function() {
     var signature = pad.toDataURL('image/png');
 
     $.ajax({
-        url: form.data('save-signature-url') + '?action=save',
+        // The payload travels as raw JSON, so the anti CSRF token has to go in the URL:
+        // without it Dolibarr answers 403 to every POST (MAIN_SECURITY_CSRF_WITH_TOKEN)
+        url: form.data('save-signature-url') + '?action=save&token=' + window.saturne.toolbox.getToken(),
         type: 'POST',
         processData: false,
         contentType: 'application/json',
@@ -170,8 +217,8 @@ window.digiriskdolibarr.preventionplanmobile.saveSignature = function() {
                 status.removeClass('success').addClass('error').text((resp && resp.error) ? resp.error : 'KO');
             }
         },
-        error: function() {
-            status.removeClass('success').addClass('error').text('KO');
+        error: function(jqXHR) {
+            status.removeClass('success').addClass('error').text('KO (HTTP ' + jqXHR.status + ')');
         }
     });
 };
@@ -262,6 +309,17 @@ window.digiriskdolibarr.preventionplanmobile.fillFoundCompany = function(resp) {
     if (resp.societe.email) {
         $('.digirisk-mobile-ext-society-email').val(resp.societe.email);
     }
+    // L'adresse est celle du tiers resolu : elle n'ecrase pas une saisie en cours quand la fiche
+    // du tiers ne la renseigne pas
+    if (resp.societe.address) {
+        $('.digirisk-mobile-ext-society-address').val(resp.societe.address);
+    }
+    if (resp.societe.zip) {
+        $('.digirisk-mobile-ext-society-zip').val(resp.societe.zip);
+    }
+    if (resp.societe.town) {
+        $('.digirisk-mobile-ext-society-town').val(resp.societe.town);
+    }
     $('.digirisk-mobile-siren-result').removeClass('error').addClass('success').text((form.data('company-found-label') || '') + ' ' + resp.societe.name);
 
     var select = $('.digirisk-mobile-contact-select');
@@ -305,10 +363,14 @@ window.digiriskdolibarr.preventionplanmobile.selectContact = function() {
     var id     = $(this).val();
 
     if (id) {
+        var contactEmail = option.data('email') || '';
+
         $('.digirisk-mobile-resp-contact-id').val(id);
         $('.digirisk-mobile-resp-lastname').val(option.data('lastname')).prop('readonly', true);
         $('.digirisk-mobile-resp-firstname').val(option.data('firstname')).prop('readonly', true);
-        $('.digirisk-mobile-resp-email').val(option.data('email')).prop('readonly', true);
+        // L'email est desormais obligatoire : le verrouiller alors que la fiche du contact n'en a
+        // pas enfermerait l'utilisateur devant une erreur qu'il ne peut pas corriger
+        $('.digirisk-mobile-resp-email').val(contactEmail).prop('readonly', contactEmail !== '');
     } else {
         $('.digirisk-mobile-resp-contact-id').val('');
         $('.digirisk-mobile-resp-lastname').val('').prop('readonly', false);

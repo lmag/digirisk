@@ -48,6 +48,7 @@ require_once __DIR__ . '/../../class/preventionplan.class.php';
 require_once __DIR__ . '/../../class/digiriskresources.class.php';
 require_once __DIR__ . '/../../class/riskanalysis/risk.class.php';
 require_once __DIR__ . '/../../lib/digiriskdolibarr_mobile.lib.php';
+require_once __DIR__ . '/../../lib/digiriskdolibarr_preventionplan.lib.php';
 
 // Global variables definitions
 global $conf, $db, $hookmanager, $langs, $moduleNameLowerCase, $user;
@@ -95,6 +96,7 @@ $uploadToken   = saturne_get_upload_token($uploadContext);
 $isEdit  = false;
 $prefill = [
     'ext_society_id' => 0, 'ext_society_name' => '', 'ext_society_email' => '', 'siren' => '',
+    'ext_society_address' => '', 'ext_society_zip' => '', 'ext_society_town' => '',
     'resp_contact_id' => 0, 'resp_lastname' => '', 'resp_firstname' => '', 'resp_email' => '', 'resp_phone' => '',
     'date_start' => '', 'date_end' => '',
     'prior_visit_bool' => 0, 'prior_visit_text' => '', 'prior_visit_date' => '',
@@ -130,9 +132,12 @@ if ($id > 0 && $object->fetch($id) > 0) {
     // fetched Societe) for a single match, and 0 when there is none.
     $extSociety = $digiriskresources->fetchResourcesFromObject('ExtSociety', $object);
     if (is_object($extSociety) && $extSociety->id > 0) {
-        $prefill['ext_society_id']    = $extSociety->id;
-        $prefill['ext_society_name']  = $extSociety->name;
-        $prefill['ext_society_email'] = $extSociety->email;
+        $prefill['ext_society_id']      = $extSociety->id;
+        $prefill['ext_society_name']    = $extSociety->name;
+        $prefill['ext_society_email']   = $extSociety->email;
+        $prefill['ext_society_address'] = $extSociety->address;
+        $prefill['ext_society_zip']     = $extSociety->zip;
+        $prefill['ext_society_town']    = $extSociety->town;
         // Show back the most precise identifier the company has on file.
         $prefill['siren']             = dol_strlen($extSociety->idprof2) ? $extSociety->idprof2 : $extSociety->idprof1;
     }
@@ -263,6 +268,9 @@ if ($action == 'add_mobile' && $permissiontoadd) {
     $idProfInput   = digiriskMobileCleanIdProf(GETPOST('siren', 'alphanohtml'));
     $societyName   = trim(GETPOST('ext_society_name', 'alphanohtml'));
     $societyEmail  = trim(GETPOST('ext_society_email', 'alphanohtml'));
+    $societyAddr   = trim(GETPOST('ext_society_address', 'alphanohtml'));
+    $societyZip    = trim(GETPOST('ext_society_zip', 'alphanohtml'));
+    $societyTown   = trim(GETPOST('ext_society_town', 'alphanohtml'));
     $respContactId = GETPOSTINT('resp_contact_id');
     $respLastname  = trim(GETPOST('resp_lastname', 'alphanohtml'));
     $respFirstname = trim(GETPOST('resp_firstname', 'alphanohtml'));
@@ -392,9 +400,23 @@ if ($action == 'add_mobile' && $permissiontoadd) {
         }
     }
 
-    // Exterior responsible: either an existing contact or a lastname to create one
-    if ($respContactId <= 0 && !dol_strlen($respLastname)) {
-        $addError($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('ExtSocietyResponsible')));
+    // Exterior responsible: either an existing contact or enough data to create one
+    if ($respContactId <= 0) {
+        if (!dol_strlen($respLastname)) {
+            $addError($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('Lastname')));
+        }
+        if (!dol_strlen($respFirstname)) {
+            $addError($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('Firstname')));
+        }
+    }
+
+    // L'email du responsable portait une etoile sans etre verifie : on pouvait enregistrer sans, le
+    // contact etait cree sans adresse et la demande de signature ne pouvait plus partir. C'est tout
+    // le parcours qui repose dessus, y compris pour un contact deja existant qui n'en aurait pas.
+    if (!dol_strlen($respEmail)) {
+        $addError($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('Email')));
+    } elseif (!isValidEmail($respEmail)) {
+        $addError($langs->trans('ErrorBadEMail', $respEmail));
     }
 
     // Dates: both required (say which one), end after start, at most one year apart
@@ -423,12 +445,25 @@ if ($action == 'add_mobile' && $permissiontoadd) {
         // 1. Resolve or create the exterior company
         if ($extSocietyId > 0) {
             $thirdparty->fetch($extSocietyId);
+
+            // L'adresse est affichee et modifiable dans le formulaire : la corriger sur place doit
+            // avoir un effet, sinon la saisie est silencieusement perdue. On n'ecrit que si elle a
+            // change, pour ne pas toucher au tiers a chaque enregistrement du plan.
+            if ($thirdparty->address != $societyAddr || $thirdparty->zip != $societyZip || $thirdparty->town != $societyTown) {
+                $thirdparty->address = $societyAddr;
+                $thirdparty->zip     = $societyZip;
+                $thirdparty->town    = $societyTown;
+                $thirdparty->update($thirdparty->id, $user);
+            }
         } else {
             // The first 9 digits are always the SIREN; a 14 digit input is a full SIRET.
             $thirdparty->name    = $societyName;
             $thirdparty->idprof1 = substr($idProfInput, 0, 9);
             $thirdparty->idprof2 = (dol_strlen($idProfInput) == 14) ? $idProfInput : '';
             $thirdparty->email   = $societyEmail;
+            $thirdparty->address = $societyAddr;
+            $thirdparty->zip     = $societyZip;
+            $thirdparty->town    = $societyTown;
             $thirdparty->client  = 0;
             $thirdparty->status  = 1;
             $resSoc = $thirdparty->create($user);
@@ -447,8 +482,13 @@ if ($action == 'add_mobile' && $permissiontoadd) {
         if (!$subError) {
             if ($respContactId > 0) {
                 $contact->fetch($respContactId);
-                if (!dol_strlen($respEmail)) {
-                    $respEmail = $contact->email;
+
+                // Un contact choisi dans la liste peut n'avoir aucune adresse : celle saisie ici
+                // est alors reportee sur sa fiche, faute de quoi la demande de signature repartirait
+                // dans le vide au prochain plan
+                if (dol_strlen($respEmail) && $contact->email != $respEmail) {
+                    $contact->email = $respEmail;
+                    $contact->update($contact->id, $user);
                 }
             } else {
                 $contact->socid     = $extSocietyId;
@@ -518,6 +558,12 @@ if ($action == 'add_mobile' && $permissiontoadd) {
                 $saveRiskPhotos();
 
                 $db->commit();
+
+                // Les etapes ci-dessus sont toutes faites sans trigger : le document est regenere
+                // ici, une fois les risques et les photos en base, pour que la diffusion deja en
+                // ligne cesse de presenter la version d'avant modification
+                digiriskRefreshPreventionPlanDocument($db, (int) $object->id, $user, $langs, true);
+
                 $redirect = $_SERVER['PHP_SELF'] . '?created=' . $object->id;
                 setEventMessages($langs->trans('MobilePPUpdated', $object->ref), null, 'mesgs');
                 if ($isAjax) {
@@ -612,33 +658,20 @@ if ($action == 'add_mobile' && $permissiontoadd) {
                     }
                 }
 
-                // Ask the exterior responsible to sign by email (email-only, no SMS configured)
+                // Le document est genere avant le mail : son destinataire arrive sur une page de
+                // signature qui doit deja presenter le plan, et la diffusion peut etre ouverte dans
+                // la foulee. Les etapes ci-dessus sont faites sans trigger, l'appel est donc force.
+                digiriskRefreshPreventionPlanDocument($db, (int) $object->id, $user, $langs, true);
+
+                // Ask the exterior responsible to sign by email (email-only, no SMS configured).
+                // L'echec n'annule pas la creation : l'ecran de succes affiche l'etat de l'envoi et
+                // permet de renvoyer le lien ou de faire signer sur le telephone.
                 $extSignatories = $signatory->fetchSignatory('ExtSocietyResponsible', $object->id, 'preventionplan');
                 if (is_array($extSignatories) && !empty($extSignatories)) {
                     $extSignatory = array_shift($extSignatories);
-                    if (isValidEmail($extSignatory->email) && dol_strlen(getDolGlobalString('MAIN_MAIL_EMAIL_FROM'))) {
-                        require_once DOL_DOCUMENT_ROOT . '/core/class/CMailFile.class.php';
-
-                        $signatureUrl = dol_buildpath('/custom/saturne/public/signature/add_signature.php?track_id=' . $extSignatory->signature_url . '&entity=' . $conf->entity . '&module_name=' . $moduleNameLowerCase . '&object_type=preventionplan&document_type=PreventionPlanDocument', 3);
-
-                        $from    = getDolGlobalString('MAIN_MAIL_EMAIL_FROM');
-                        $subject = $langs->transnoentities('MobilePPSignatureEmailSubject', $object->ref);
-                        $message = $langs->transnoentities('MobilePPSignatureEmailContent', $thirdparty->name, $signatureUrl);
-
-                        $mailfile = new CMailFile($subject, $extSignatory->email, $from, $message, [], [], [], '', '', 0, -1, '', '', '', '', 'mail');
-                        if (!$mailfile->error && (dol_strlen(getDolGlobalString('MAIN_MAIL_SMTPS_ID')) || getDolGlobalInt('SATURNE_USE_ALL_EMAIL_MODE') > 0)) {
-                            if ($mailfile->sendfile()) {
-                                $extSignatory->last_email_sent_date = dol_now();
-                                $extSignatory->update($user, true);
-                                $extSignatory->setPending($user, true);
-                            } else {
-                                setEventMessages($langs->trans('MobilePPWarningEmailNotSent'), null, 'warnings');
-                            }
-                        } else {
-                            setEventMessages($langs->trans('MobilePPWarningEmailNotConfigured'), null, 'warnings');
-                        }
-                    } else {
-                        setEventMessages($langs->trans('MobilePPWarningEmailNotConfigured'), null, 'warnings');
+                    $mailResult   = digiriskSendPreventionPlanSignatureEmail($db, $object, $extSignatory, $thirdparty->name, $user, $langs);
+                    if (!$mailResult['sent']) {
+                        setEventMessages($langs->trans('MobilePPWarningEmailNotSentDetail', $mailResult['error']), null, 'warnings');
                     }
                 }
 
@@ -679,6 +712,46 @@ if ($action == 'add_mobile' && $permissiontoadd) {
         echo json_encode(['success' => false, 'errors' => $errorMessages]);
         exit;
     }
+}
+
+/*
+ * Renvoi du lien de signature a l'entreprise exterieure depuis l'ecran de succes.
+ *
+ * L'envoi automatique de la creation peut avoir echoue, ou le destinataire ne jamais l'avoir recu :
+ * sans ce renvoi il faudrait repasser par Dolibarr, alors que la personne est encore sur place.
+ */
+if ($action == 'resend_ext_signature_email' && $permissiontoadd) {
+    ob_start();
+
+    $planId       = GETPOSTINT('plan_id');
+    $resendPlan   = new PreventionPlan($db);
+    $resendResult = ['sent' => false, 'error' => $langs->trans('ErrorRecordNotFound'), 'email' => ''];
+
+    if ($planId > 0 && $resendPlan->fetch($planId) > 0) {
+        $extSignatories = $signatory->fetchSignatory('ExtSocietyResponsible', $resendPlan->id, 'preventionplan');
+        if (is_array($extSignatories) && !empty($extSignatories)) {
+            $extSignatory = array_shift($extSignatories);
+            $extSociety   = $digiriskresources->fetchResourcesFromObject('ExtSociety', $resendPlan);
+            $societyName  = '';
+            if (!empty($extSociety->id) && $thirdparty->fetch($extSociety->id) > 0) {
+                $societyName = $thirdparty->name;
+            }
+
+            $resendResult = digiriskSendPreventionPlanSignatureEmail($db, $resendPlan, $extSignatory, $societyName, $user, $langs);
+        } else {
+            $resendResult['error'] = $langs->trans('MobilePPWarningNoRecipientEmail');
+        }
+    }
+
+    while (ob_get_level()) {
+        ob_end_clean();
+    }
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => $resendResult['sent'],
+        'message' => $resendResult['sent'] ? $langs->trans('MobilePPSignatureEmailSentTo', $resendResult['email']) : $langs->trans('MobilePPWarningEmailNotSentDetail', $resendResult['error']),
+    ]);
+    exit;
 }
 
 /*
