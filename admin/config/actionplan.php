@@ -34,6 +34,7 @@ global $conf, $db, $langs, $user;
 
 // Libraries
 require_once DOL_DOCUMENT_ROOT . "/core/lib/admin.lib.php";
+require_once DOL_DOCUMENT_ROOT . "/categories/class/categorie.class.php";
 
 require_once __DIR__ . '/../../lib/digiriskdolibarr.lib.php';
 
@@ -45,7 +46,8 @@ $action     = GETPOST('action', 'alpha');
 $backtopage = GETPOST('backtopage', 'alpha');
 
 // Security check - Protection if external user
-$permissiontoread = $user->rights->digiriskdolibarr->adminpage->read;
+$permissiontoread  = $user->rights->digiriskdolibarr->adminpage->read;
+$permissiontowrite = saturne_check_admin_write_access();
 saturne_check_access($permissiontoread);
 
 /*
@@ -67,8 +69,16 @@ if ($action == 'update_kanban') {
     dolibarr_set_const($db, 'DIGIRISKDOLIBARR_KANBAN_DRAFT_MAX', GETPOSTINT('DIGIRISKDOLIBARR_KANBAN_DRAFT_MAX'), 'chaine', 0, '', $conf->entity);
     dolibarr_set_const($db, 'DIGIRISKDOLIBARR_KANBAN_PROGRESS_MAX', GETPOSTINT('DIGIRISKDOLIBARR_KANBAN_PROGRESS_MAX'), 'chaine', 0, '', $conf->entity);
     dolibarr_set_const($db, 'DIGIRISKDOLIBARR_KANBAN_CONTROL_MAX', GETPOSTINT('DIGIRISKDOLIBARR_KANBAN_CONTROL_MAX'), 'chaine', 0, '', $conf->entity);
+    $columnSource = GETPOST('DIGIRISKDOLIBARR_KANBAN_COLUMN_SOURCE', 'aZ09');
+    if (!in_array($columnSource, ['thresholds', 'dictionary'])) {
+        $columnSource = 'thresholds';
+    }
+    dolibarr_set_const($db, 'DIGIRISKDOLIBARR_KANBAN_COLUMN_SOURCE', $columnSource, 'chaine', 0, '', $conf->entity);
     setEventMessages($langs->trans('SetupSaved'), null, 'mesgs');
 }
+
+// Actions set_mod, update_mask and the set_/del_ switch of the module constants
+require_once __DIR__ . '/../../../saturne/core/tpl/actions/admin_conf_actions.tpl.php';
 
 /*
  * View
@@ -123,7 +133,7 @@ foreach ($actionPlanLogs as $constName => $transKeys) {
     print digiriskdolibarr_tuto_image('actionplan', $transKeys[2], $langs->trans($transKeys[0]));
     print '</td>';
     print '<td class="center">';
-    print ajax_constantonoff($constName);
+    print saturne_constant_onoff($constName, $permissiontowrite);
     print '</td>';
     print '</tr>';
 }
@@ -132,6 +142,28 @@ print '</table>';
 
 // Click on a tuto image to display it full size
 digiriskdolibarr_tuto_overlay();
+
+// Yearly action plan settings
+print '<br>';
+print load_fiche_titre('<i class="fas fa-calendar-alt"></i> ' . $langs->trans("ActionPlanYearDisplay"), '', '');
+print '<hr>';
+
+print '<table class="noborder centpercent">';
+print '<tr class="liste_titre">';
+print '<td>' . $langs->trans("Name") . '</td>';
+print '<td>' . $langs->trans("Description") . '</td>';
+print '<td class="center">' . $langs->trans("Status") . '</td>';
+print '</tr>';
+
+print '<tr class="oddeven"><td>';
+print $langs->trans('ActionPlanCarryOverLate');
+print '</td><td>';
+print $langs->trans('ActionPlanCarryOverLateDesc');
+print '</td><td class="center">';
+print saturne_constant_onoff('DIGIRISKDOLIBARR_ACTIONPLAN_CARRY_OVER_LATE', $permissiontowrite);
+print '</td></tr>';
+
+print '</table>';
 
 // Kanban display settings
 print '<br>';
@@ -148,6 +180,20 @@ print '<td>' . $langs->trans("Name") . '</td>';
 print '<td>' . $langs->trans("Description") . '</td>';
 print '<td class="center">' . $langs->trans("Value") . '</td>';
 print '</tr>';
+
+// Source of the Kanban columns: the percentage thresholds below (default) or the column dictionary
+$columnSource = getDolGlobalString('DIGIRISKDOLIBARR_KANBAN_COLUMN_SOURCE', 'thresholds');
+
+print '<tr class="oddeven"><td>';
+print $langs->trans('KanbanColumnSource');
+print '</td><td>';
+print $langs->trans('KanbanColumnSourceDesc');
+print '</td><td class="center">';
+print '<select name="DIGIRISKDOLIBARR_KANBAN_COLUMN_SOURCE" class="flat minwidth200">';
+print '<option value="thresholds" ' . ($columnSource != 'dictionary' ? 'selected' : '') . '>' . $langs->trans('KanbanColumnSourceThresholds') . '</option>';
+print '<option value="dictionary" ' . ($columnSource == 'dictionary' ? 'selected' : '') . '>' . $langs->trans('KanbanColumnSourceDictionary') . '</option>';
+print '</select>';
+print '</td></tr>';
 
 $kanbanSettings = [
     'DIGIRISKDOLIBARR_KANBAN_PAGE_SIZE'    => ['KanbanPageSize', 'KanbanPageSizeDesc', 30, 1],
@@ -169,6 +215,39 @@ foreach ($kanbanSettings as $constName => $cfg) {
 print '</table>';
 print '<div class="center"><input type="submit" class="button button-save" value="' . $langs->trans("Save") . '"></div>';
 print '</form>';
+
+// Lists feeding the Kanban boards — their values live in Dolibarr categories and dictionaries,
+// the shortcuts below open the screen managing each one
+print '<br>';
+print load_fiche_titre('<i class="fas fa-list-ul"></i> ' . $langs->trans("ActionPlanDictionaries"), '', '');
+print '<hr>';
+
+print '<table class="noborder centpercent">';
+print '<tr class="liste_titre">';
+print '<td>' . $langs->trans("Name") . '</td>';
+print '<td>' . $langs->trans("Description") . '</td>';
+print '<td class="center">' . $langs->trans("Action") . '</td>';
+print '</tr>';
+
+$kanbanDictionaries = [
+    ['ActionPlanColumnDictionary', 'ActionPlanColumnDictionaryDesc', DOL_URL_ROOT . '/admin/dict.php'],
+    ['ActionPlanTagDictionary', 'ActionPlanTagDictionaryDesc', DOL_URL_ROOT . '/categories/categorie_list.php?type=' . Categorie::TYPE_PROJECT_TASK],
+];
+if (isModEnabled('ticket')) {
+    $kanbanDictionaries[] = ['ActionPlanTicketDictionaries', 'ActionPlanTicketDictionariesDesc', DOL_URL_ROOT . '/admin/dict.php'];
+}
+
+foreach ($kanbanDictionaries as $kanbanDictionary) {
+    print '<tr class="oddeven"><td>';
+    print $langs->trans($kanbanDictionary[0]);
+    print '</td><td>';
+    print $langs->trans($kanbanDictionary[1]);
+    print '</td><td class="center">';
+    print '<a class="butAction" href="' . $kanbanDictionary[2] . '" target="_blank"><i class="fas fa-external-link-alt"></i> ' . $langs->trans('ActionPlanManageDictionary') . '</a>';
+    print '</td></tr>';
+}
+
+print '</table>';
 
 // Page end
 print dol_get_fiche_end();

@@ -63,6 +63,13 @@ $id      = GETPOSTINT('id'); // > 0 => edit an existing prevention plan with the
 
 // Initialize technical objects
 $object            = new PreventionPlan($db);
+
+if ($id > 0 && $object->fetch($id) > 0) {
+    if ($object->status == PreventionPlan::STATUS_LOCKED) {
+        accessforbidden($langs->trans('ErrorRecordIsLocked'));
+    }
+}
+
 $preventionplandet = new PreventionPlanLine($db);
 $signatory         = new SaturneSignature($db, $moduleNameLowerCase, $object->element);
 $digiriskresources = new DigiriskResources($db);
@@ -94,11 +101,19 @@ $uploadToken   = saturne_get_upload_token($uploadContext);
  */
 
 $isEdit  = false;
+
+// Default dates from admin config
+$defaultStartToday = getDolGlobalInt('DIGIRISKDOLIBARR_PREVENTIONPLAN_DEFAULT_DATE_START_TODAY', 1);
+$defaultDuration   = getDolGlobalInt('DIGIRISKDOLIBARR_PREVENTIONPLAN_DEFAULT_DURATION', 30);
+$defaultDateStart  = $defaultStartToday ? dol_print_date(dol_now(), '%Y-%m-%d') : '';
+$defaultDateEnd    = $defaultStartToday ? dol_print_date(dol_time_plus_duree(dol_now(), $defaultDuration, 'd'), '%Y-%m-%d') : '';
+
 $prefill = [
+    'label' => '',
     'ext_society_id' => 0, 'ext_society_name' => '', 'ext_society_email' => '', 'siren' => '',
     'ext_society_address' => '', 'ext_society_zip' => '', 'ext_society_town' => '',
     'resp_contact_id' => 0, 'resp_lastname' => '', 'resp_firstname' => '', 'resp_email' => '', 'resp_phone' => '',
-    'date_start' => '', 'date_end' => '',
+    'date_start' => $defaultDateStart, 'date_end' => $defaultDateEnd,
     'prior_visit_bool' => 0, 'prior_visit_text' => '', 'prior_visit_date' => '',
     'cssct_intervention' => 0, 'categories' => [],
     'risks' => [], 'certifications' => [],
@@ -108,11 +123,13 @@ if ($id > 0 && $object->fetch($id) > 0) {
     $isEdit = true;
     $object->fetch_optionals();
 
+    $prefill['label']      = $object->label;
     $prefill['date_start'] = $object->date_start ? dol_print_date($object->date_start, '%Y-%m-%d') : '';
     $prefill['date_end']   = $object->date_end   ? dol_print_date($object->date_end, '%Y-%m-%d')   : '';
 
     $prefill['prior_visit_bool'] = (int) $object->prior_visit_bool;
-    $prefill['prior_visit_text'] = (string) $object->prior_visit_text;
+    // Le formulaire mobile est un textarea simple : le HTML saisi en WYSIWYG cote bureau y est aplati
+    $prefill['prior_visit_text'] = saturne_flatten_wysiwyg_blocks((string) $object->prior_visit_text, true);
     $prefill['prior_visit_date'] = $object->prior_visit_date ? dol_print_date($object->prior_visit_date, '%Y-%m-%d') : '';
 
     $prefill['cssct_intervention'] = (int) $object->cssct_intervention;
@@ -192,6 +209,33 @@ if ($id > 0 && $object->fetch($id) > 0) {
     }
 
     $prefill['certifications'] = !empty($object->array_options['options_mobile_certifications']) ? json_decode($object->array_options['options_mobile_certifications'], true) : [];
+
+    // Fetch schedules
+    require_once __DIR__ . '/../../../saturne/class/saturneschedules.class.php';
+    $saturneSchedules = new SaturneSchedules($db);
+    $saturneSchedules->fetch(0, '', ' AND element_type = "preventionplan" AND element_id = ' . $object->id . ' AND status = 1');
+    
+    foreach (['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as $day) {
+        $parts = explode(' ', $saturneSchedules->$day);
+        $prefill['schedule_' . $day . '_am'] = $parts[0] ?? 'N/A';
+        $prefill['schedule_' . $day . '_pm'] = $parts[1] ?? 'N/A';
+    }
+} else {
+    // Default values for new plan
+    $defaultDays = [
+        'monday'    => $conf->global->MAIN_INFO_OPENINGHOURS_MONDAY ?? '',
+        'tuesday'   => $conf->global->MAIN_INFO_OPENINGHOURS_TUESDAY ?? '',
+        'wednesday' => $conf->global->MAIN_INFO_OPENINGHOURS_WEDNESDAY ?? '',
+        'thursday'  => $conf->global->MAIN_INFO_OPENINGHOURS_THURSDAY ?? '',
+        'friday'    => $conf->global->MAIN_INFO_OPENINGHOURS_FRIDAY ?? '',
+        'saturday'  => $conf->global->MAIN_INFO_OPENINGHOURS_SATURDAY ?? '',
+        'sunday'    => $conf->global->MAIN_INFO_OPENINGHOURS_SUNDAY ?? ''
+    ];
+    foreach ($defaultDays as $day => $val) {
+        $parts = explode(' ', trim($val));
+        $prefill['schedule_' . $day . '_am'] = !empty($parts[0]) ? $parts[0] : 'N/A';
+        $prefill['schedule_' . $day . '_pm'] = !empty($parts[1]) ? $parts[1] : 'N/A';
+    }
 }
 
 /*
@@ -256,6 +300,7 @@ if ($action == 'add_mobile' && $permissiontoadd) {
 
     // Collect an error: record it for the AJAX JSON response and, in classic mode, show it on the reloaded page.
     $addError = function ($message) use (&$error, &$errorMessages, $isAjax) {
+        $message = dol_html_entity_decode($message, ENT_QUOTES);
         $errorMessages[] = $message;
         $error++;
         if (!$isAjax) {
@@ -286,6 +331,14 @@ if ($action == 'add_mobile' && $permissiontoadd) {
 
     $cssctIntervention = GETPOSTINT('cssct_intervention');
     $planCategories    = GETPOST('categories', 'array');
+
+    // Schedules
+    $schedules = [];
+    foreach (['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as $day) {
+        $am = trim(GETPOST('schedule_' . $day . '_am', 'alphanohtml'));
+        $pm = trim(GETPOST('schedule_' . $day . '_pm', 'alphanohtml'));
+        $schedules[$day] = trim($am . ' ' . $pm);
+    }
 
     // Selected risks (danger categories) — read here so both the create and the edit paths can use them.
     // Each risk block carries its own description, photos and protections, all keyed by the block index.
@@ -393,7 +446,7 @@ if ($action == 'add_mobile' && $permissiontoadd) {
     // Exterior company: either an existing third party or enough data to create one
     if ($extSocietyId <= 0) {
         if (!dol_strlen($societyName)) {
-            $addError($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('ExtSociety')));
+            $addError($langs->trans('ErrorFieldRequired', $langs->transnoentities('ExtSociety')));
         }
         if (!digiriskMobileIsValidIdProf($idProfInput)) {
             $addError($langs->trans('MobilePPErrorInvalidSiren'));
@@ -403,10 +456,10 @@ if ($action == 'add_mobile' && $permissiontoadd) {
     // Exterior responsible: either an existing contact or enough data to create one
     if ($respContactId <= 0) {
         if (!dol_strlen($respLastname)) {
-            $addError($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('Lastname')));
+            $addError($langs->trans('ErrorFieldRequired', $langs->transnoentities('Lastname')));
         }
         if (!dol_strlen($respFirstname)) {
-            $addError($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('Firstname')));
+            $addError($langs->trans('ErrorFieldRequired', $langs->transnoentities('Firstname')));
         }
     }
 
@@ -414,7 +467,7 @@ if ($action == 'add_mobile' && $permissiontoadd) {
     // contact etait cree sans adresse et la demande de signature ne pouvait plus partir. C'est tout
     // le parcours qui repose dessus, y compris pour un contact deja existant qui n'en aurait pas.
     if (!dol_strlen($respEmail)) {
-        $addError($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('Email')));
+        $addError($langs->trans('ErrorFieldRequired', $langs->transnoentities('Email')));
     } elseif (!isValidEmail($respEmail)) {
         $addError($langs->trans('ErrorBadEMail', $respEmail));
     }
@@ -443,16 +496,43 @@ if ($action == 'add_mobile' && $permissiontoadd) {
         $subError = 0;
 
         // 1. Resolve or create the exterior company
+        // Typing the details instead of picking the company in the list used to create a new third
+        // party every time, so a company already on file whose SIREN is missing or written
+        // differently came back as a duplicate. Resolve it first, and only create what is new.
+        if ($extSocietyId <= 0) {
+            $extSocietyId = digiriskMobileFindThirdparty($db, $idProfInput, $societyName);
+        }
+
         if ($extSocietyId > 0) {
             $thirdparty->fetch($extSocietyId);
 
+            $hasAddressChange = ($thirdparty->address != $societyAddr || $thirdparty->zip != $societyZip || $thirdparty->town != $societyTown);
+            $hasSirenChange   = false;
+
+            if (dol_strlen($idProfInput)) {
+                $idprof1 = substr($idProfInput, 0, 9);
+                $idprof2 = (dol_strlen($idProfInput) == 14) ? $idProfInput : '';
+                if (empty($thirdparty->idprof1) || empty($thirdparty->idprof2)) {
+                    if (empty($thirdparty->idprof1) && !empty($idprof1)) {
+                        $thirdparty->idprof1 = $idprof1;
+                        $hasSirenChange = true;
+                    }
+                    if (empty($thirdparty->idprof2) && !empty($idprof2)) {
+                        $thirdparty->idprof2 = $idprof2;
+                        $hasSirenChange = true;
+                    }
+                }
+            }
+
             // L'adresse est affichee et modifiable dans le formulaire : la corriger sur place doit
             // avoir un effet, sinon la saisie est silencieusement perdue. On n'ecrit que si elle a
-            // change, pour ne pas toucher au tiers a chaque enregistrement du plan.
-            if ($thirdparty->address != $societyAddr || $thirdparty->zip != $societyZip || $thirdparty->town != $societyTown) {
-                $thirdparty->address = $societyAddr;
-                $thirdparty->zip     = $societyZip;
-                $thirdparty->town    = $societyTown;
+            // change, pour ne pas toucher au tiers a chaque enregistrement du plan. De meme pour le SIREN/SIRET.
+            if ($hasAddressChange || $hasSirenChange) {
+                if ($hasAddressChange) {
+                    $thirdparty->address = $societyAddr;
+                    $thirdparty->zip     = $societyZip;
+                    $thirdparty->town    = $societyTown;
+                }
                 $thirdparty->update($thirdparty->id, $user);
             }
         } else {
@@ -470,9 +550,11 @@ if ($action == 'add_mobile' && $permissiontoadd) {
             if ($resSoc > 0) {
                 $extSocietyId = $resSoc;
             } else {
-                $errorMessages[] = $thirdparty->error ?: 'KO';
+                $msg = (dol_strlen($thirdparty->error) && $thirdparty->error !== 'KO') ? $thirdparty->error : $langs->trans('MobilePPErrorCreatingThirdparty');
+                dol_syslog('preventionplan_mobile_create: thirdparty->create failed: ' . $thirdparty->error . ' | ' . implode(', ', (array) $thirdparty->errors), LOG_ERR);
+                $errorMessages[] = $msg;
                 if (!$isAjax) {
-                    setEventMessages($thirdparty->error, $thirdparty->errors, 'errors');
+                    setEventMessages($msg, null, 'errors');
                 }
                 $subError++;
             }
@@ -501,9 +583,11 @@ if ($action == 'add_mobile' && $permissiontoadd) {
                 if ($resContact > 0) {
                     $respContactId = $resContact;
                 } else {
-                    $errorMessages[] = $contact->error ?: 'KO';
+                    $msg = (dol_strlen($contact->error) && $contact->error !== 'KO') ? $contact->error : $langs->trans('MobilePPErrorCreatingContact');
+                    dol_syslog('preventionplan_mobile_create: contact->create failed: ' . $contact->error . ' | ' . implode(', ', (array) $contact->errors), LOG_ERR);
+                    $errorMessages[] = $msg;
                     if (!$isAjax) {
-                        setEventMessages($contact->error, $contact->errors, 'errors');
+                        setEventMessages($msg, null, 'errors');
                     }
                     $subError++;
                 }
@@ -512,7 +596,9 @@ if ($action == 'add_mobile' && $permissiontoadd) {
 
         // 3b. Edit mode: update the existing plan (no re-validation, no re-signature, no email)
         if (!$subError && $isEdit) {
-            $object->label              = $langs->transnoentities('PreventionPlan') . ' - ' . $thirdparty->name;
+            $object->element            = 'preventionplan';
+            $postedLabel = GETPOST('label', 'alpha');
+            $object->label = trim($postedLabel) ? trim($postedLabel) : ($langs->transnoentities('PreventionPlan') . ' - ' . $thirdparty->name);
             $object->date_start         = $dateStart;
             $object->date_end           = $dateEnd;
             $object->prior_visit_bool   = $priorVisitBool;
@@ -559,6 +645,22 @@ if ($action == 'add_mobile' && $permissiontoadd) {
 
                 $db->commit();
 
+                // Save schedules
+                require_once __DIR__ . '/../../../saturne/class/saturneschedules.class.php';
+                $saturneSchedules = new SaturneSchedules($db);
+                $saturneSchedules->fetch(0, '', ' AND element_type = "preventionplan" AND element_id = ' . $object->id . ' AND status = 1');
+                $saturneSchedules->element_type = 'preventionplan';
+                $saturneSchedules->element_id = $object->id;
+                $saturneSchedules->status = 1;
+                foreach ($schedules as $day => $val) {
+                    $saturneSchedules->$day = $val;
+                }
+                if ($saturneSchedules->id > 0) {
+                    $saturneSchedules->update($user);
+                } else {
+                    $saturneSchedules->create($user);
+                }
+
                 // Les etapes ci-dessus sont toutes faites sans trigger : le document est regenere
                 // ici, une fois les risques et les photos en base, pour que la diffusion deja en
                 // ligne cesse de presenter la version d'avant modification
@@ -571,16 +673,18 @@ if ($action == 'add_mobile' && $permissiontoadd) {
                         ob_end_clean();
                     }
                     header('Content-Type: application/json');
-                    echo json_encode(['success' => true, 'redirect' => $redirect]);
+                    echo json_encode(['success' => true, 'redirect' => $redirect], JSON_INVALID_UTF8_SUBSTITUTE);
                     exit;
                 }
                 header('Location: ' . $redirect);
                 exit;
             }
 
-            $errorMessages[] = $object->error ?: 'KO';
+            $msg = (dol_strlen($object->error) && $object->error !== 'KO') ? $object->error : $langs->trans('MobilePPErrorUpdatingPlan');
+            dol_syslog('preventionplan_mobile_create: object->update failed: ' . $object->error . ' | ' . implode(', ', (array) $object->errors), LOG_ERR);
+            $errorMessages[] = $msg;
             if (!$isAjax) {
-                setEventMessages($object->error, $object->errors, 'errors');
+                setEventMessages($msg, null, 'errors');
             }
             $subError++;
         }
@@ -592,7 +696,8 @@ if ($action == 'add_mobile' && $permissiontoadd) {
             $object->ref_ext       = 'digirisk_' . $object->ref;
             $object->date_creation = $db->idate($now);
             $object->tms           = $now;
-            $object->label         = $langs->transnoentities('PreventionPlan') . ' - ' . $thirdparty->name;
+            $postedLabel = GETPOST('label', 'alpha');
+            $object->label         = trim($postedLabel) ? trim($postedLabel) : ($langs->transnoentities('PreventionPlan') . ' - ' . $thirdparty->name);
             $object->status        = PreventionPlan::STATUS_DRAFT;
             $object->fk_project    = $fkProject;
             $object->date_start    = $dateStart;
@@ -658,6 +763,17 @@ if ($action == 'add_mobile' && $permissiontoadd) {
                     }
                 }
 
+                // Save schedules
+                require_once __DIR__ . '/../../../saturne/class/saturneschedules.class.php';
+                $saturneSchedules = new SaturneSchedules($db);
+                $saturneSchedules->element_type = 'preventionplan';
+                $saturneSchedules->element_id = $object->id;
+                $saturneSchedules->status = 1;
+                foreach ($schedules as $day => $val) {
+                    $saturneSchedules->$day = $val;
+                }
+                $saturneSchedules->create($user);
+
                 // Le document est genere avant le mail : son destinataire arrive sur une page de
                 // signature qui doit deja presenter le plan, et la diffusion peut etre ouverte dans
                 // la foulee. Les etapes ci-dessus sont faites sans trigger, l'appel est donc force.
@@ -666,12 +782,15 @@ if ($action == 'add_mobile' && $permissiontoadd) {
                 // Ask the exterior responsible to sign by email (email-only, no SMS configured).
                 // L'echec n'annule pas la creation : l'ecran de succes affiche l'etat de l'envoi et
                 // permet de renvoyer le lien ou de faire signer sur le telephone.
-                $extSignatories = $signatory->fetchSignatory('ExtSocietyResponsible', $object->id, 'preventionplan');
-                if (is_array($extSignatories) && !empty($extSignatories)) {
-                    $extSignatory = array_shift($extSignatories);
-                    $mailResult   = digiriskSendPreventionPlanSignatureEmail($db, $object, $extSignatory, $thirdparty->name, $user, $langs);
-                    if (!$mailResult['sent']) {
-                        setEventMessages($langs->trans('MobilePPWarningEmailNotSentDetail', $mailResult['error']), null, 'warnings');
+                $autoSendEmail = getDolGlobalInt('DIGIRISKDOLIBARR_PREVENTIONPLAN_EMAIL_AUTO_SEND', 0);
+                if ($autoSendEmail) {
+                    $extSignatories = $signatory->fetchSignatory('ExtSocietyResponsible', $object->id, 'preventionplan');
+                    if (is_array($extSignatories) && !empty($extSignatories)) {
+                        $extSignatory = array_shift($extSignatories);
+                        $mailResult   = digiriskSendPreventionPlanSignatureEmail($db, $object, $extSignatory, $thirdparty->name, $user, $langs);
+                        if (!$mailResult['sent']) {
+                            setEventMessages($langs->trans('MobilePPWarningEmailNotSentDetail', $mailResult['error']), null, 'warnings');
+                        }
                     }
                 }
 
@@ -683,15 +802,17 @@ if ($action == 'add_mobile' && $permissiontoadd) {
                         ob_end_clean();
                     }
                     header('Content-Type: application/json');
-                    echo json_encode(['success' => true, 'redirect' => $redirect]);
+                    echo json_encode(['success' => true, 'redirect' => $redirect], JSON_INVALID_UTF8_SUBSTITUTE);
                     exit;
                 }
                 header('Location: ' . $redirect);
                 exit;
             } else {
-                $errorMessages[] = $object->error ?: 'KO';
+                $msg = (dol_strlen($object->error) && $object->error !== 'KO') ? $object->error : $langs->trans('MobilePPErrorCreatingPlan');
+                dol_syslog('preventionplan_mobile_create: object->create failed: ' . $object->error . ' | ' . implode(', ', (array) $object->errors), LOG_ERR);
+                $errorMessages[] = $msg;
                 if (!$isAjax) {
-                    setEventMessages($object->error, $object->errors, 'errors');
+                    setEventMessages($msg, null, 'errors');
                 }
                 $subError++;
             }
@@ -709,9 +830,25 @@ if ($action == 'add_mobile' && $permissiontoadd) {
             ob_end_clean();
         }
         header('Content-Type: application/json');
-        echo json_encode(['success' => false, 'errors' => $errorMessages]);
+        echo json_encode(['success' => false, 'errors' => $errorMessages], JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
+}
+
+/*
+ * Verrouillage du plan de prevention depuis l'ecran de succes.
+ */
+if ($action == 'lock_mobile' && $permissiontoadd) {
+    $planId = GETPOSTINT('plan_id');
+    $lockPlan = new PreventionPlan($db);
+    
+    if ($planId > 0 && $lockPlan->fetch($planId) > 0) {
+        $lockPlan->setLocked($user, false);
+        digiriskRefreshPreventionPlanDocument($db, (int) $lockPlan->id, $user, $langs, true);
+    }
+    
+    header('Location: ' . $_SERVER['PHP_SELF'] . '?created=' . $planId);
+    exit;
 }
 
 /*
@@ -746,11 +883,17 @@ if ($action == 'resend_ext_signature_email' && $permissiontoadd) {
     while (ob_get_level()) {
         ob_end_clean();
     }
+    
+    $errorMsg = !empty($resendResult['error']) ? $resendResult['error'] : '';
+    if (!empty($errorMsg) && function_exists('mb_check_encoding') && !mb_check_encoding($errorMsg, 'UTF-8')) {
+        $errorMsg = mb_convert_encoding($errorMsg, 'UTF-8', 'ISO-8859-1');
+    }
+
     header('Content-Type: application/json');
     echo json_encode([
         'success' => $resendResult['sent'],
-        'message' => $resendResult['sent'] ? $langs->trans('MobilePPSignatureEmailSentTo', $resendResult['email']) : $langs->trans('MobilePPWarningEmailNotSentDetail', $resendResult['error']),
-    ]);
+        'message' => $resendResult['sent'] ? $langs->trans('MobilePPSignatureEmailSentTo', $resendResult['email']) : $langs->trans('MobilePPWarningEmailNotSentDetail', $errorMsg),
+    ], JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 
@@ -758,7 +901,7 @@ if ($action == 'resend_ext_signature_email' && $permissiontoadd) {
  * View
  */
 
-$title    = $langs->trans('MobileQuickCreation');
+$title    = mb_strtoupper($langs->transnoentities('preventionplan'), 'UTF-8');
 $help_url = 'FR:Module_Digirisk';
 $moreJS   = [
     '/custom/saturne/js/saturne.min.js',

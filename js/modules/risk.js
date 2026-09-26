@@ -56,7 +56,9 @@ window.digiriskdolibarr.risk.selectDanger = function( event ) {
 
 	var riskDescriptionPrefill = element.closest('.wpeo-dropdown').find('.input-risk-description-prefill').val();
 	if (riskDescriptionPrefill == 1) {
-		element.closest('.risk-content').find('.risk-description textarea').text(element.closest('.wpeo-tooltip-event').attr('aria-label'));
+		// L'aria-label sert l'infobulle et contient le bloc réglementaire des catégories de pénibilité : la description ne veut que le nom.
+		var categoryName = element.data('name') || element.closest('.wpeo-tooltip-event').attr('aria-label');
+		element.closest('.risk-content').find('.risk-description textarea').text(categoryName);
 	}
 	var elementParent = $(this).closest('.modal-container');
 
@@ -198,7 +200,7 @@ window.digiriskdolibarr.risk.createRisk = function ( event ) {
 			}
 		}),
 		processData: false,
-    contentType: 'application/json charset=utf-8',
+    contentType: 'application/json',
 		success: function ( resp ) {
 			$('.fichecenter.risklist').html($(resp).find('#searchFormListRisks'))
 
@@ -273,7 +275,7 @@ window.digiriskdolibarr.risk.saveRisk = function ( event ) {
 			newParent: newParent,
       categories: categories
 		}),
-    contentType: 'application/json charset=utf-8',
+    contentType: 'application/json',
 		success: function ( resp ) {
 			$('.wpeo-loader').removeClass('wpeo-loader');
 			let actionContainerSuccess = $('.messageSuccessRiskEdit');
@@ -339,7 +341,7 @@ window.digiriskdolibarr.risk.unlinkSharedRisk = function ( event ) {
 		data: JSON.stringify({
 			riskID: riskId,
 		}),
-    contentType: 'application/json charset=utf-8',
+    contentType: 'application/json',
 		success: function ( resp ) {
 			//refresh shared risk list form
 			$('.confirmquestions').html($(resp).find('.confirmquestions').children())

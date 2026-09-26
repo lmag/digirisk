@@ -72,27 +72,187 @@ foreach ($signalisationCategories as $signalisationItem) {
 
         <div class="digirisk-mobile-form-errors hidden"></div>
 
-        <!-- Card 1: interior company, auto-signed by the connected responsible -->
+        <!-- Card 3: intervention period, capped to one year -->
         <div class="digirisk-mobile-card">
-            <div class="digirisk-mobile-card__title"><i class="fas fa-building"></i> <?php print $langs->trans('MobilePPInteriorCompany'); ?></div>
+            <?php
+            // Progress strip: where the plan stands, from its creation to its archiving.
+            // Nothing is signed nor locked yet at this point, only the step being played is green.
+            $workflowIcons = digiriskMobileWorkflowIcons();
+
+            $stepsCreation = [
+                [
+                    'title'   => $langs->trans('MobilePPStepCreated'),
+                    'status'  => !empty($isEdit) ? $langs->transnoentities('MobileStepDone') : $langs->transnoentities('MobileStepInProgress'),
+                    'date'    => dol_print_date(dol_now(), 'day'),
+                    'done'    => !empty($isEdit),
+                    'current' => empty($isEdit),
+                    'viewBox' => $workflowIcons['created']['viewBox'],
+                    'svg'     => $workflowIcons['created']['svg'],
+                ],
+                [
+                    'title'   => $langs->trans('MobileStepUserCompanyResponsible'),
+                    'status'  => $langs->transnoentities('MobileStepTodo'),
+                    'date'    => '',
+                    'done'    => false,
+                    'current' => !empty($isEdit),
+                    'viewBox' => $workflowIcons['user']['viewBox'],
+                    'svg'     => $workflowIcons['user']['svg'],
+                ],
+                [
+                    'title'   => $langs->trans('MobileStepExteriorCompanyResponsible'),
+                    'status'  => $langs->transnoentities('MobileStepTodo'),
+                    'date'    => '',
+                    'done'    => false,
+                    'current' => false,
+                    'viewBox' => $workflowIcons['company']['viewBox'],
+                    'svg'     => $workflowIcons['company']['svg'],
+                ],
+                [
+                    'title'   => $langs->trans('MobileStepLock'),
+                    'status'  => $langs->transnoentities('MobileStepTodo'),
+                    'date'    => '',
+                    'done'    => false,
+                    'current' => false,
+                    'viewBox' => $workflowIcons['lock']['viewBox'],
+                    'svg'     => $workflowIcons['lock']['svg'],
+                ],
+                [
+                    'title'   => $langs->trans('MobileStepArchive'),
+                    'status'  => $langs->transnoentities('MobileStepTodo'),
+                    'date'    => '',
+                    'done'    => false,
+                    'current' => false,
+                    'viewBox' => $workflowIcons['archive']['viewBox'],
+                    'svg'     => $workflowIcons['archive']['svg'],
+                ],
+            ];
+
+            print digiriskMobileRenderWorkflow($stepsCreation, (!empty($isEdit) && $object->ref) ? $object->getNomUrl(1) : '', true);
+            ?>
+            
+            <div class="digirisk-mobile-field" style="margin-bottom: 15px;">
+                <label><?php print $langs->trans('MobilePPMotif') != 'MobilePPMotif' ? $langs->trans('MobilePPMotif') : 'Motif de l\'intervention'; ?> *</label>
+                <input type="text" name="label" class="digirisk-mobile-label" required placeholder="Ex: Maintenance annuelle" value="<?php print dol_escape_htmltag($prefill['label'] ?? ''); ?>">
+            </div>
+
             <div class="digirisk-mobile-row">
                 <div class="digirisk-mobile-field">
-                    <label><?php print $langs->trans('Company'); ?></label>
-                    <div class="digirisk-mobile-static"><?php print dol_escape_htmltag($mysoc->name); ?></div>
+                    <label><?php print $langs->trans('DateStart'); ?> *</label>
+                    <input type="date" name="date_start" class="digirisk-mobile-date-start" value="<?php print dol_escape_htmltag($prefill["date_start"]); ?>">
                 </div>
                 <div class="digirisk-mobile-field">
-                    <label><?php print $langs->trans('MobilePPResponsibleAutoSign'); ?></label>
-                    <div class="digirisk-mobile-static"><?php print dol_escape_htmltag($user->getFullName($langs)); ?></div>
+                    <label><?php print $langs->trans('DateEnd'); ?> *</label>
+                    <input type="date" name="date_end" class="digirisk-mobile-date-end" value="<?php print dol_escape_htmltag($prefill["date_end"]); ?>">
+                </div>
+            </div>
+            <div class="digirisk-mobile-help"><?php print $langs->trans('MobilePPMaxOneYearHint'); ?></div>
+            <div class="digirisk-mobile-date-error hidden"></div>
+
+            <div class="digirisk-mobile-field" style="margin-top: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                    <label style="margin: 0;"><?php print $langs->trans('MobilePPSchedules') != 'MobilePPSchedules' ? $langs->trans('MobilePPSchedules') : 'Horaires d\'intervention'; ?></label>
+                    <div style="font-size: 0.85em; display: flex; gap: 15px; align-items: center;">
+                        <a href="<?php print dol_buildpath('/admin/openinghours.php', 1); ?>" target="_blank" style="color: #4a55d1; text-decoration: none;"><i class="fas fa-cog"></i> <?php print $langs->trans('MobilePPConfigHours') != 'MobilePPConfigHours' ? $langs->trans('MobilePPConfigHours') : 'Configurer vos horaires ici'; ?></a>
+                        <button type="button" id="btn-copy-company-hours" title="Copier les horaires de l'entreprise" style="background: none; border: 1px solid #4a55d1; color: #4a55d1; border-radius: 4px; padding: 4px 8px; cursor: pointer;"><i class="fas fa-copy"></i></button>
+                    </div>
+                </div>
+                <div style="overflow-x: auto; margin-top: 10px;">
+                    <table class="digirisk-mobile-table" style="width: 100%; border-collapse: collapse; text-align: center; font-size: 0.85em;">
+                        <thead>
+                            <tr style="background-color: #f4f5f9; border-bottom: 2px solid #ddd;">
+                                <th style="padding: 10px; border: 1px solid #ddd;"></th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Lun</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Mar</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Mer</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Jeu</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Ven</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Sam</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Dim</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td style="padding: 10px; border: 1px solid #ddd; background-color: #f4f5f9; font-weight: bold;">Matin</td>
+                                <?php foreach (['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as $day) { ?>
+                                    <td style="padding: 4px; border: 1px solid #ddd; background: #fff;">
+                                        <input type="text" name="schedule_<?php print $day; ?>_am" value="<?php print dol_escape_htmltag($prefill['schedule_'.$day.'_am']); ?>" style="width: 100%; border: none; text-align: center; background: transparent; padding: 6px;">
+                                    </td>
+                                <?php } ?>
+                            </tr>
+                            <tr>
+                                <td style="padding: 10px; border: 1px solid #ddd; background-color: #f4f5f9; font-weight: bold;">Après-midi</td>
+                                <?php foreach (['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as $day) { ?>
+                                    <td style="padding: 4px; border: 1px solid #ddd; background: #fff;">
+                                        <input type="text" name="schedule_<?php print $day; ?>_pm" value="<?php print dol_escape_htmltag($prefill['schedule_'.$day.'_pm']); ?>" style="width: 100%; border: none; text-align: center; background: transparent; padding: 6px;">
+                                    </td>
+                                <?php } ?>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <script>
+                document.getElementById('btn-copy-company-hours').addEventListener('click', function() {
+                    var hours = {
+                        'monday': <?php print json_encode($conf->global->MAIN_INFO_OPENINGHOURS_MONDAY ?? ''); ?>,
+                        'tuesday': <?php print json_encode($conf->global->MAIN_INFO_OPENINGHOURS_TUESDAY ?? ''); ?>,
+                        'wednesday': <?php print json_encode($conf->global->MAIN_INFO_OPENINGHOURS_WEDNESDAY ?? ''); ?>,
+                        'thursday': <?php print json_encode($conf->global->MAIN_INFO_OPENINGHOURS_THURSDAY ?? ''); ?>,
+                        'friday': <?php print json_encode($conf->global->MAIN_INFO_OPENINGHOURS_FRIDAY ?? ''); ?>,
+                        'saturday': <?php print json_encode($conf->global->MAIN_INFO_OPENINGHOURS_SATURDAY ?? ''); ?>,
+                        'sunday': <?php print json_encode($conf->global->MAIN_INFO_OPENINGHOURS_SUNDAY ?? ''); ?>
+                    };
+                    for (var day in hours) {
+                        var str = hours[day].trim();
+                        var am = '', pm = '';
+                        if (str) {
+                            var parts = str.split(' ');
+                            if (parts.length > 0) am = parts[0];
+                            if (parts.length > 1) pm = parts[1];
+                        }
+                        var inputAm = document.querySelector('input[name="schedule_' + day + '_am"]');
+                        var inputPm = document.querySelector('input[name="schedule_' + day + '_pm"]');
+                        if (inputAm) inputAm.value = am;
+                        if (inputPm) inputPm.value = pm;
+                    }
+                });
+                </script>
+            </div>
+        </div>
+
+        
+        <!-- Card 1: interior company, auto-signed by the connected responsible -->
+        <div class="digirisk-mobile-card digirisk-mobile-extsign" style="margin-bottom: 10px;">
+            <div class="digirisk-mobile-extsign__title" style="display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 10px; border-bottom: 1px solid #eaeaea;">
+                <div style="text-transform: uppercase; font-weight: bold; font-size: 0.9em; color: #4a55d1; margin-top: 5px;"><i class="fas fa-user-tie"></i> <?php print $langs->trans('PreventionPlanUserCompany'); ?></div>
+                
+                <div class="digirisk-mobile-signature-saved <?php print $hasSignature ? '' : 'hidden'; ?>" style="text-align: right; margin-left: 10px;">
+                    <div style="display: flex; align-items: center; background: #e6f2e9; color: #2d6a3c; padding: 4px 8px; border-radius: 15px; font-weight: bold; line-height: 1.2;">
+                        <span style="font-size: 0.8em; text-transform: uppercase;"><i class="fas fa-check-circle" style="margin-right: 5px;"></i> <?php print $langs->trans('MobilePPSignatureSaved') != 'MobilePPSignatureSaved' ? $langs->trans('MobilePPSignatureSaved') : 'Signature enregistrée'; ?></span>
+                        <div style="height: 24px; width: 24px; display: flex; align-items: center; justify-content: center; margin-left: 8px; background: #fff; border-radius: 4px; border: 1px solid #c3e6cb; cursor: pointer;" onclick="document.getElementById('modal-signature-preview').classList.add('modal-active');">
+                            <i class="fas fa-signature"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="digirisk-mobile-extsign__who" style="display: flex; flex-direction: column; gap: 4px; font-size: 0.9em; margin-bottom: 0px; margin-top: 10px;">
+                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px;">
+                    <div><span style="color: #666;">Tiers :</span> <span style="color: #000; font-weight: 500;"><?php print dol_escape_htmltag($mysoc->name); ?></span></div>
+                    <div><span style="color: #666;">Siren :</span> <span style="color: #000;"><?php print dol_escape_htmltag($mysoc->idprof1); ?></span></div>
+                </div>
+                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px;">
+                    <div><span style="color: #666;">Resp.</span> <span style="color: #000; font-weight: 500;"><?php print dol_escape_htmltag($user->getFullName($langs)); ?></span></div>
+                    <div><span style="color: #666;">Tél :</span> <span style="color: #000;"><?php print dol_escape_htmltag($user->office_phone); ?></span></div>
+                </div>
+                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px;">
+                    <div><span style="color: #666;">Mail :</span> <span style="color: #000;"><?php print dol_escape_htmltag($user->email); ?></span></div>
+                    <div><span style="color: #666;">Poste :</span> <span style="color: #000;"><?php print dol_escape_htmltag($user->job ?? ''); ?></span></div>
                 </div>
             </div>
 
             <div class="digirisk-mobile-signature">
-                <div class="digirisk-mobile-signature-saved <?php print $hasSignature ? '' : 'hidden'; ?>">
-                    <span class="digirisk-mobile-signature-badge"><i class="fas fa-check-circle"></i> <?php print $langs->trans('MobilePPSignatureSaved'); ?></span>
-                    <img class="digirisk-mobile-signature-preview" src="<?php print $hasSignature ? dol_escape_htmltag($savedSignature) : ''; ?>" alt="">
-                </div>
-                <div class="digirisk-mobile-signature-draw <?php print $hasSignature ? 'hidden' : ''; ?>">
-                    <div class="digirisk-mobile-signature-hint"><?php print $langs->trans('MobilePPDrawSignatureHint'); ?></div>
+                <div class="digirisk-mobile-signature-draw <?php print $hasSignature ? 'hidden' : ''; ?>" style="margin-top: 15px; border-top: 1px solid #eaeaea; padding-top: 15px;">
+                    <div class="digirisk-mobile-signature-hint" style="font-size: 0.9em; margin-bottom: 10px; color: #666; font-weight: 500;"><i class="fas fa-pen-nib"></i> <?php print $langs->trans('MobilePPDrawSignatureHint'); ?></div>
                     <canvas class="digirisk-mobile-signature-canvas"></canvas>
                     <div class="digirisk-mobile-signature-actions">
                         <button type="button" class="digirisk-mobile-signature-clear wpeo-button button-grey"><?php print $langs->trans('MobilePPClearSignature'); ?></button>
@@ -100,6 +260,23 @@ foreach ($signalisationCategories as $signalisationItem) {
                     </div>
                 </div>
                 <div class="digirisk-mobile-signature-status"></div>
+            </div>
+
+            <!-- Modal Signature Preview -->
+            <div class="wpeo-modal" id="modal-signature-preview">
+                <div class="modal-container">
+                    <div class="modal-header">
+                        <h2 class="modal-title"><?php print $langs->trans('MobilePPSignatureSaved') != 'MobilePPSignatureSaved' ? $langs->trans('MobilePPSignatureSaved') : 'Signature enregistrée'; ?></h2>
+                        <div class="modal-close" onclick="document.getElementById('modal-signature-preview').classList.remove('modal-active');"><i class="fas fa-times"></i></div>
+                    </div>
+                    <div class="modal-content" style="text-align: center;">
+                        <img class="digirisk-mobile-signature-preview-img" src="<?php print $hasSignature ? dol_escape_htmltag($savedSignature) : ''; ?>" style="max-width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 10px; background: #fff;" alt="">
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="wpeo-button button-grey" onclick="document.getElementById('modal-signature-preview').classList.remove('modal-active');"><?php print $langs->trans('Close'); ?></button>
+                        <button type="button" class="wpeo-button button-blue" onclick="document.getElementById('modal-signature-preview').classList.remove('modal-active'); document.querySelector('.digirisk-mobile-signature-saved').classList.add('hidden'); document.querySelector('.digirisk-mobile-signature-draw').classList.remove('hidden');"><i class="fas fa-edit"></i> <?php print $langs->trans('Modify'); ?></button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -113,7 +290,7 @@ foreach ($signalisationCategories as $signalisationItem) {
                      identifiant vienne de la liste ou du SIREN saisi plus bas -->
                 <div class="digirisk-mobile-picker-row">
                     <?php print $form->select_company($prefill['ext_society_id'], 'ext_society_picker', '', '&nbsp;', 0, 0, [], 0, 'digirisk-mobile-society-select maxwidth500'); ?>
-                    <button type="button" class="digirisk-mobile-siren-search wpeo-button button-blue" aria-label="<?php print dol_escape_htmltag($langs->trans('Search')); ?>"><i class="fas fa-search"></i></button>
+                    <a href="<?php print dol_buildpath('/societe/card.php', 1) . '?action=create'; ?>" target="_blank" class="wpeo-button button-blue" title="<?php print dol_escape_htmltag($langs->trans('NewThirdParty')); ?>"><i class="fas fa-plus"></i></a>
                 </div>
             </div>
             <div class="digirisk-mobile-separator"><span><?php print $langs->trans('MobilePPOrFillManually'); ?></span></div>
@@ -125,14 +302,14 @@ foreach ($signalisationCategories as $signalisationItem) {
                 </div>
                 <div class="digirisk-mobile-field">
                     <label><?php print $langs->trans('MobileSirenOrSiret'); ?> *</label>
-                    <input type="text" name="siren" class="digirisk-mobile-siren-input" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="<?php print dol_escape_htmltag($langs->trans('MobileSirenOrSiretPlaceholder')); ?>" value="<?php print dol_escape_htmltag($prefill["siren"]); ?>">
+                    <input type="text" name="siren" class="digirisk-mobile-siren-input" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="<?php print dol_escape_htmltag($langs->trans('MobileSirenOrSiretPlaceholder')); ?>" value="<?php print dol_escape_htmltag($prefill["siren"]); ?>" pattern="[\d\s]{9,20}" title="SIREN/SIRET (9 ou 14 chiffres)">
                 </div>
             </div>
             <div class="digirisk-mobile-siren-result"></div>
 
             <div class="digirisk-mobile-field">
                 <label><?php print $langs->trans('Email'); ?></label>
-                <input type="email" name="ext_society_email" class="digirisk-mobile-ext-society-email" autocomplete="off" value="<?php print dol_escape_htmltag($prefill["ext_society_email"]); ?>">
+                <input type="email" name="ext_society_email" class="digirisk-mobile-ext-society-email" autocomplete="off" value="<?php print dol_escape_htmltag($prefill["ext_society_email"]); ?>" pattern="[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}">
             </div>
             <div class="digirisk-mobile-field">
                 <label><?php print $langs->trans('Address'); ?></label>
@@ -170,31 +347,14 @@ foreach ($signalisationCategories as $signalisationItem) {
             <div class="digirisk-mobile-row">
                 <div class="digirisk-mobile-field">
                     <label><?php print $langs->trans('Email'); ?> *</label>
-                    <input type="email" name="resp_email" class="digirisk-mobile-resp-email" autocomplete="off" value="<?php print dol_escape_htmltag($prefill["resp_email"]); ?>">
+                    <input type="email" name="resp_email" class="digirisk-mobile-resp-email" autocomplete="off" value="<?php print dol_escape_htmltag($prefill["resp_email"]); ?>" pattern="[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}" title="<?php print $langs->trans('MobilePPErrorInvalidEmail') ?: 'Veuillez saisir une adresse email valide.'; ?>">
                 </div>
                 <div class="digirisk-mobile-field">
                     <label><?php print $langs->trans('Phone'); ?></label>
-                    <input type="tel" name="resp_phone" class="digirisk-mobile-resp-phone" autocomplete="off" value="<?php print dol_escape_htmltag($prefill["resp_phone"]); ?>">
+                    <input type="tel" name="resp_phone" class="digirisk-mobile-resp-phone" autocomplete="off" value="<?php print dol_escape_htmltag($prefill["resp_phone"]); ?>" pattern="^(\+?\d{1,3}[\-.\s]?)?(\(?\d{1,4}\)?[\-.\s]?)?[\d\-.\s]{5,15}$" title="<?php print $langs->trans('MobilePPErrorInvalidPhone') ?: 'Veuillez saisir un numéro de téléphone valide.'; ?>">
                 </div>
             </div>
             <div class="digirisk-mobile-help"><?php print $langs->trans('MobilePPEmailForSignatureHelp'); ?></div>
-        </div>
-
-        <!-- Card 3: intervention period, capped to one year -->
-        <div class="digirisk-mobile-card">
-            <div class="digirisk-mobile-card__title"><i class="fas fa-calendar-alt"></i> <?php print $langs->trans('MobilePPPeriod'); ?></div>
-            <div class="digirisk-mobile-row">
-                <div class="digirisk-mobile-field">
-                    <label><?php print $langs->trans('DateStart'); ?> *</label>
-                    <input type="date" name="date_start" class="digirisk-mobile-date-start" value="<?php print dol_escape_htmltag($prefill["date_start"]); ?>">
-                </div>
-                <div class="digirisk-mobile-field">
-                    <label><?php print $langs->trans('DateEnd'); ?> *</label>
-                    <input type="date" name="date_end" class="digirisk-mobile-date-end" value="<?php print dol_escape_htmltag($prefill["date_end"]); ?>">
-                </div>
-            </div>
-            <div class="digirisk-mobile-help"><?php print $langs->trans('MobilePPMaxOneYearHint'); ?></div>
-            <div class="digirisk-mobile-date-error hidden"></div>
         </div>
 
         <!-- Prior formalities: CSSCT intervention then joint prior inspection, in that order,
@@ -226,19 +386,19 @@ foreach ($signalisationCategories as $signalisationItem) {
         // declaree, le multiselect s'affichait vide sans rien dire : on annonce l'absence et on
         // donne le lien pour en creer une plutot que de laisser chercher.
         if (isModEnabled('categorie')) {
-            $planTagOptions = $form->select_all_categories('preventionplan', '', 'parent', 64, 0, 1);
+            $planTagOptions = $form->select_all_categories('digiriskpreventionplan', '', 'parent', 64, 0, 1);
             $planTagOptions = is_array($planTagOptions) ? $planTagOptions : [];
         ?>
         <div class="digirisk-mobile-card">
             <div class="digirisk-mobile-card__title"><i class="fas fa-tags"></i> <?php print $langs->trans('Categories'); ?></div>
             <?php if (!empty($planTagOptions)) {
-                print $form->multiselectarray('categories', $planTagOptions, $prefill['categories'], '', 0, 'digirisk-mobile-tags-select maxwidth500');
+                print $form->multiselectarray('categories', $planTagOptions, $prefill['categories'], '', 0, 'digirisk-mobile-tags-select minwidth500 width100p');
             } else { ?>
             <div class="digirisk-mobile-empty">
                 <i class="fas fa-info-circle"></i>
                 <span><?php print $langs->trans('MobilePPNoTagAvailable'); ?></span>
             </div>
-            <a class="digirisk-mobile-empty__action" href="<?php print DOL_URL_ROOT . '/categories/card.php?action=create&type=preventionplan'; ?>" target="_blank">
+            <a class="digirisk-mobile-empty__action" href="<?php print DOL_URL_ROOT . '/categories/card.php?action=create&type=digiriskpreventionplan'; ?>" target="_blank">
                 <i class="fas fa-plus-circle"></i> <?php print $langs->trans('MobilePPCreateTag'); ?>
             </a>
             <?php } ?>
@@ -430,7 +590,7 @@ foreach ($signalisationCategories as $signalisationItem) {
             $rowThumbnail = '';
             $rowName      = '';
             $rowComment   = '';
-            include __DIR__ . '/preventionplan_mobile_protection_row.tpl.php';
+            include __DIR__ . '/digiriskdolibarr_mobile_protection_row.tpl.php';
         ?></template>
     </form>
 </div>

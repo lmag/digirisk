@@ -54,9 +54,11 @@ window.digiriskdolibarr.preventionplanmobile.bound = false;
  */
 window.digiriskdolibarr.preventionplanmobile.init = function() {
     // The fire permit interface shares every selector of this one, and both modules delegate on
-    // document: bind only when the prevention plan form is the one on screen.
+    // document: bind only when the prevention plan form or success screen is the one on screen.
     var form = $('.digirisk-mobile-form--preventionplan');
-    if (!form.length) {
+    var successBlock = $('.digirisk-mobile-extsign--preventionplan');
+    
+    if (!form.length && !successBlock.length) {
         return;
     }
 
@@ -107,6 +109,28 @@ window.digiriskdolibarr.preventionplanmobile.event = function() {
     $(document).on('click', '.digirisk-mobile-cert-item-delete', window.digiriskdolibarr.preventionplanmobile.removeCertification);
     $(document).on('submit', '.digirisk-mobile-form', window.digiriskdolibarr.preventionplanmobile.submitForm);
     $(document).on('click', '.digirisk-mobile-extsign__resend', window.digiriskdolibarr.preventionplanmobile.resendExtSignatureEmail);
+    $(document).on('input blur', '.digirisk-mobile-form input', window.digiriskdolibarr.preventionplanmobile.checkRealTimeValidity);
+};
+
+/**
+ * Handle real-time visual feedback on form fields (orange KO / green OK)
+ *
+ * @param  {Event} event input or blur event
+ * @return {void}
+ */
+window.digiriskdolibarr.preventionplanmobile.checkRealTimeValidity = function(event) {
+    var el = this;
+    if (el.value === '' && !el.required) {
+        $(el).removeClass('is-valid is-invalid');
+        return;
+    }
+    if (el.type === 'email' || el.pattern || el.required) {
+        if (el.checkValidity && el.checkValidity()) {
+            $(el).removeClass('is-invalid').addClass('is-valid');
+        } else if (el.checkValidity && !el.checkValidity()) {
+            $(el).removeClass('is-valid').addClass('is-invalid');
+        }
+    }
 };
 
 /**
@@ -132,6 +156,7 @@ window.digiriskdolibarr.preventionplanmobile.resendExtSignatureEmail = function(
         url: document.URL.split('#')[0] + (document.URL.indexOf('?') >= 0 ? '&' : '?') + 'action=resend_ext_signature_email&token=' + window.saturne.toolbox.getToken(),
         type: 'POST',
         data: { plan_id: planId },
+        dataType: 'json',
         success: function(resp) {
             button.removeClass('button-disable');
             if (!resp) {
@@ -140,15 +165,25 @@ window.digiriskdolibarr.preventionplanmobile.resendExtSignatureEmail = function(
             status
                 .removeClass('digirisk-mobile-extsign__status--pending digirisk-mobile-extsign__status--sent digirisk-mobile-extsign__status--error')
                 .addClass(resp.success ? 'digirisk-mobile-extsign__status--sent' : 'digirisk-mobile-extsign__status--error')
-                .find('span').text(resp.message || '');
+                .find('span').text(resp.message ? resp.message : 'Erreur (réponse : ' + JSON.stringify(resp) + ')');
             status.find('i').attr('class', resp.success ? 'fas fa-paper-plane' : 'fas fa-exclamation-circle');
         },
         error: function(jqXHR) {
             button.removeClass('button-disable');
+            
+            var defaultError = 'Erreur serveur (HTTP ' + jqXHR.status + ')';
+            if (jqXHR.status === 200) {
+                var mailErrorMsg = status.closest('.digirisk-mobile-extsign').data('error-mail');
+                if (mailErrorMsg) {
+                    defaultError = mailErrorMsg;
+                }
+            }
+
             status
-                .removeClass('digirisk-mobile-extsign__status--pending digirisk-mobile-extsign__status--sent')
+                .removeClass('digirisk-mobile-extsign__status--pending digirisk-mobile-extsign__status--sent digirisk-mobile-extsign__status--error')
                 .addClass('digirisk-mobile-extsign__status--error')
-                .find('span').text('KO (HTTP ' + jqXHR.status + ')');
+                .find('span').text(defaultError);
+            status.find('i').attr('class', 'fas fa-exclamation-circle');
         }
     });
 };
@@ -214,11 +249,11 @@ window.digiriskdolibarr.preventionplanmobile.saveSignature = function() {
                 $('.digirisk-mobile-signature-saved').removeClass('hidden');
                 status.removeClass('error').addClass('success').text('');
             } else {
-                status.removeClass('success').addClass('error').text((resp && resp.error) ? resp.error : 'KO');
+                status.removeClass('success').addClass('error').text((resp && resp.error) ? resp.error : 'Erreur lors de l\'enregistrement');
             }
         },
         error: function(jqXHR) {
-            status.removeClass('success').addClass('error').text('KO (HTTP ' + jqXHR.status + ')');
+            status.removeClass('success').addClass('error').text('Erreur serveur (HTTP ' + jqXHR.status + ')');
         }
     });
 };
@@ -240,14 +275,18 @@ window.digiriskdolibarr.preventionplanmobile.searchSiren = function() {
 
     window.saturne.loader.display($('.digirisk-mobile-siren-search'));
 
+    // Le nom part avec l'identifiant : une entreprise deja en base dont le SIREN n'est pas
+    // renseigne se retrouve par sa raison sociale au lieu d'etre annoncee comme a creer
+    var companyName = $('.digirisk-mobile-ext-society-name').val() || '';
+
     $.ajax({
-        url: form.data('siren-lookup-url') + '?siren=' + encodeURIComponent(siren),
+        url: form.data('siren-lookup-url') + '?siren=' + encodeURIComponent(siren) + '&name=' + encodeURIComponent(companyName),
         type: 'GET',
         dataType: 'json',
         success: function(resp) {
             $('.digirisk-mobile-siren-search').removeClass('wpeo-loader');
             if (!resp || !resp.success) {
-                result.removeClass('success').addClass('error').text((resp && resp.error) ? resp.error : 'KO');
+                result.removeClass('success').addClass('error').text((resp && resp.error) ? resp.error : 'Erreur lors de la recherche');
                 return;
             }
             if (resp.found) {
@@ -259,7 +298,7 @@ window.digiriskdolibarr.preventionplanmobile.searchSiren = function() {
         },
         error: function() {
             $('.digirisk-mobile-siren-search').removeClass('wpeo-loader');
-            result.removeClass('success').addClass('error').text('KO');
+            result.removeClass('success').addClass('error').text('Erreur de connexion au serveur');
         }
     });
 };
@@ -370,7 +409,7 @@ window.digiriskdolibarr.preventionplanmobile.selectContact = function() {
         $('.digirisk-mobile-resp-firstname').val(option.data('firstname')).prop('readonly', true);
         // L'email est desormais obligatoire : le verrouiller alors que la fiche du contact n'en a
         // pas enfermerait l'utilisateur devant une erreur qu'il ne peut pas corriger
-        $('.digirisk-mobile-resp-email').val(contactEmail).prop('readonly', contactEmail !== '');
+        $('.digirisk-mobile-resp-email').val(contactEmail).prop('readonly', false);
     } else {
         $('.digirisk-mobile-resp-contact-id').val('');
         $('.digirisk-mobile-resp-lastname').val('').prop('readonly', false);
@@ -739,6 +778,12 @@ window.digiriskdolibarr.preventionplanmobile.submitForm = function(event) {
         submitBtn.prop('disabled', false).removeClass('wpeo-loader button-disable').addClass('button-blue');
     };
 
+    if (form[0].checkValidity && !form[0].checkValidity()) {
+        form[0].reportValidity();
+        resetSubmit();
+        return;
+    }
+
     if (form.attr('data-has-signature') !== '1') {
         resetSubmit();
         $('.digirisk-mobile-signature-status').removeClass('success').addClass('error').text(form.data('need-signature-label') || '');
@@ -771,11 +816,11 @@ window.digiriskdolibarr.preventionplanmobile.submitForm = function(event) {
                 window.location.href = resp.redirect; // keep the spinner during navigation
                 return;
             }
-            window.digiriskdolibarr.preventionplanmobile.showFormErrors((resp && resp.errors && resp.errors.length) ? resp.errors : ['KO']);
+            window.digiriskdolibarr.preventionplanmobile.showFormErrors((resp && resp.errors && resp.errors.length) ? resp.errors : ['Une erreur inattendue est survenue.']);
             resetSubmit();
         },
         error: function() {
-            window.digiriskdolibarr.preventionplanmobile.showFormErrors(['KO']);
+            window.digiriskdolibarr.preventionplanmobile.showFormErrors(['Erreur de connexion au serveur.']);
             resetSubmit();
         }
     });

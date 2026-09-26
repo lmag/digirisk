@@ -125,9 +125,23 @@ function digiriskRefreshPreventionPlanDocument(DoliDB $db, int $planId, User $us
     $document   = new PreventionPlanDocument($db);
     $moreParams = ['object' => $plan, 'user' => $user, 'objectType' => $plan->element];
 
+    // PreventionPlanDocumentFillJSON() reads the plan ID via GETPOST('id').
+    // When called from an AJAX context (mobile creation), the parameter is absent:
+    // inject it so the document generator can resolve the plan.
+    $savedGetId = $_GET['id'] ?? null;
+    $_GET['id'] = $planId;
+
     ob_start();
     $generated  = $document->generateDocument('preventionplandocument', $outputLangs, 0, 0, 0, $moreParams);
     $strayOutput = ob_get_clean();
+
+    // Restore the original GET parameter
+    if ($savedGetId === null) {
+        unset($_GET['id']);
+    } else {
+        $_GET['id'] = $savedGetId;
+    }
+
     if (dol_strlen($strayOutput)) {
         dol_syslog('digiriskRefreshPreventionPlanDocument : sortie parasite de la generation : ' . dol_trunc($strayOutput, 500), LOG_WARNING);
     }
@@ -237,7 +251,63 @@ function digiriskSendPreventionPlanSignatureEmail(DoliDB $db, PreventionPlan $pl
     $subject      = $langs->transnoentities('MobilePPSignatureEmailSubject', $plan->ref);
     $message      = $langs->transnoentities('MobilePPSignatureEmailContent', $societyName, $signatureUrl);
 
-    $mailfile = new CMailFile($subject, $signatory->email, $from, $message, [], [], [], '', '', 0, -1, '', '', '', '', 'mail');
+    // Override with custom template if configured
+    $templateId = 0;
+    if ($signatory->role === 'ExtSocietyResponsible') {
+        $templateId = getDolGlobalInt('DIGIRISKDOLIBARR_PREVENTIONPLAN_EMAIL_TEMPLATE_EXT');
+    } elseif ($signatory->role === 'ExtSocietyAttendant') {
+        $templateId = getDolGlobalInt('DIGIRISKDOLIBARR_PREVENTIONPLAN_EMAIL_TEMPLATE_INT');
+    }
+
+    $filepath = [];
+    $mimetype = [];
+    $filename = [];
+
+    if ($templateId > 0) {
+        require_once DOL_DOCUMENT_ROOT . '/core/class/cemailtemplate.class.php';
+        $emailTemplate = new CEmailTemplate($db);
+        if ($emailTemplate->fetch($templateId) > 0) {
+            
+            // Si la piece jointe est demandée, on genère et on cherche le document
+            if ($emailTemplate->joinfiles == 1) {
+                digiriskGeneratePreventionPlanDocument($plan->id);
+                $dir = $conf->digiriskdolibarr->dir_output . '/' . $plan->element . 'document/' . dol_sanitizeFileName($plan->ref);
+                $fileArray = dol_dir_list($dir, 'files', 0, '\.pdf$', 'date', 'DESC');
+                if (!empty($fileArray)) {
+                    $filepath[] = $dir . '/' . $fileArray[0]['name'];
+                    $mimetype[] = 'application/pdf';
+                    $filename[] = $fileArray[0]['name'];
+                }
+            }
+
+            $userFullName = $user->getFullName($langs);
+            $userEmail = $user->email;
+            $userPhonePro = $user->office_phone;
+            $myCompanyName = getDolGlobalString('MAIN_INFO_SOCIETE_NOM');
+            $myCompanyFullAddress = trim($conf->global->MAIN_INFO_SOCIETE_ADDRESS . ' ' . $conf->global->MAIN_INFO_SOCIETE_ZIP . ' ' . $conf->global->MAIN_INFO_SOCIETE_TOWN);
+
+            $subject = str_replace(
+                ['__PLAN_REF__', '__COMPANY_NAME__'], 
+                [$plan->ref, $societyName], 
+                $emailTemplate->topic
+            );
+            $message = str_replace(
+                [
+                    '__PLAN_REF__', '__COMPANY_NAME__', '__SIGNATURE_URL__',
+                    '__USER_FULLNAME__', '__USER_EMAIL__', '__USER_PHONEPRO__',
+                    '__MYCOMPANY_NAME__', '__MYCOMPANY_FULLADDRESS__'
+                ], 
+                [
+                    $plan->ref, $societyName, $signatureUrl,
+                    $userFullName, $userEmail, $userPhonePro,
+                    $myCompanyName, $myCompanyFullAddress
+                ], 
+                $emailTemplate->content
+            );
+        }
+    }
+
+    $mailfile = new CMailFile($subject, $signatory->email, $from, $message, $filepath, $mimetype, $filename, '', '', 0, -1, '', '', '', '', 'mail');
     if ($mailfile->error) {
         $result['error'] = $mailfile->error;
 
@@ -251,8 +321,32 @@ function digiriskSendPreventionPlanSignatureEmail(DoliDB $db, PreventionPlan $pl
     }
 
     $signatory->last_email_sent_date = dol_now();
-    $signatory->update($user, true);
+    $db->query("UPDATE " . MAIN_DB_PREFIX . "saturne_object_signature SET last_email_sent_date = '" . $db->idate($signatory->last_email_sent_date) . "' WHERE rowid = " . (int)$signatory->id);
+    // $signatory->update($user, true);
     $signatory->setPending($user, true);
+
+    // Log the sent email as an agenda event
+    require_once DOL_DOCUMENT_ROOT . '/comm/action/class/actioncomm.class.php';
+    $actioncomm = new ActionComm($db);
+    $actioncomm->type_code   = 'AC_EMAIL';
+    $actioncomm->code        = 'AC_EMAIL';
+    $actioncomm->label       = $subject;
+    $actioncomm->note_private = $message;
+    $actioncomm->fk_project  = $plan->fk_project;
+    $actioncomm->datep       = dol_now();
+    $actioncomm->datef       = dol_now();
+    $actioncomm->percentage  = -1; // Not applicable
+    $actioncomm->socid       = (isset($signatory->fk_soc) && $signatory->fk_soc > 0) ? $signatory->fk_soc : (isset($plan->fk_soc) ? $plan->fk_soc : 0);
+    $actioncomm->contactid   = $signatory->fk_object;
+    $actioncomm->authorid    = $user->id;
+    $actioncomm->userownerid = $user->id;
+    $actioncomm->email_from  = getDolGlobalString('MAIN_MAIL_EMAIL_FROM');
+    $actioncomm->email_to    = $signatory->email;
+    $actioncomm->email_subject = $subject;
+    $actioncomm->email_msgid = '';
+    $actioncomm->fk_element  = $plan->id;
+    $actioncomm->elementtype = 'preventionplan@digiriskdolibarr';
+    $actioncomm->create($user);
 
     $result['sent'] = true;
 

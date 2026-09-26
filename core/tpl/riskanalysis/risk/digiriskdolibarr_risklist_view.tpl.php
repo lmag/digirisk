@@ -1,5 +1,8 @@
 <?php
 $allRisks             = $allRisks ?? 0;
+// Archive tab of an element: same list, restricted to the archived risks, without the creation
+// buttons and with Unarchive as the only mass action
+$archivedRiskList     = $archivedRiskList ?? 0;
 $selectedfields_label = 'risklist_selectedfields';
 // Selection of new fields
 require __DIR__ . '/../../../../class/actions_changeselectedfields.php';
@@ -306,25 +309,17 @@ $DUProject                   = new Project($db);
 $DUProject->fetch($riskType == 'risk' ? $conf->global->DIGIRISKDOLIBARR_DU_PROJECT : $conf->global->DIGIRISKDOLIBARR_ENVIRONMENT_PROJECT);
 $extrafields->fetch_name_optionals_label($digiriskTask->table_element);
 
-$riskAssessment->ismultientitymanaged = 0;
-
 $activeDigiriskElementList = $digiriskelement->getActiveDigiriskElements();
-$riskAssessmentList        = $riskAssessment->fetchAll();
 $riskAssessmentNextValue   = $refEvaluationMod->getNextValue($evaluation);
 $riskAssessmentTaskList    = $risk->getTasksWithFkRisk();
 $taskNextValue             = $refTaskMod->getNextValue('', $task);
-$usertmp->fetchAll();
-$usersList                 = $usertmp->users;
 $timeSpentSortedByTasks    = $digiriskTask->fetchAllTimeSpentAllUsers('AND fk_element > 0', 'element_datehour', 'DESC', 1);
 $dangerCategories          = Risk::getDangerCategories($riskType);
 
-$riskAssessment->ismultientitymanaged = 1;
-
-if (is_array($riskAssessmentList) && !empty($riskAssessmentList)) {
-    foreach ($riskAssessmentList as $riskAssessmentSingle) {
-        $riskAssessmentsOrderedByRisk[$riskAssessmentSingle->fk_risk][$riskAssessmentSingle->id] = $riskAssessmentSingle;
-    }
-}
+// The list is paginated and both collections are only read by id, so they load their entries
+// on demand instead of instantiating every user and every risk assessment of the database
+$usersList                    = digirisk_get_user_list();
+$riskAssessmentsOrderedByRisk = digirisk_get_risk_assessments_by_risk();
 
 $deletedElements = $digiriskelement->getMultiEntityTrashList();
 if (empty($deletedElements)) {
@@ -373,6 +368,11 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
         $sql .= " AND e.entity IN (" . $conf->entity . ") ";
     }
     $sql .= ' AND r.type = "' . $riskType . '"';
+    // Archived risks live in the archive tab of the element, they are out of the active list
+    // unless the status filter explicitly asks for them
+    if ($search['status'] === '' || $search['status'] == -1) {
+        $sql .= ' AND r.status <> ' . Risk::STATUS_ARCHIVED;
+    }
 
     foreach ($search as $key => $val) {
         if ($key == 'status' && $search[$key] == -1) continue;
@@ -395,10 +395,11 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
             }
         }
     }
-    if ($search_all) $sql .= natural_search(array_keys($fieldstosearchall), $search_all);
+    if ($search_all) $sql .= $risk->getSearchAllSqlFilter($fieldstosearchall, $search_all);
     if (!empty($conf->categorie->enabled) && getDolGlobalInt('DIGIRISKDOLIBARR_CATEGORY_ON_RISK') > 0) {
         $sql .= Categorie::getFilterSelectQuery('risk', 'r.rowid', $search_category_array);
     }
+    $sql .= $risk->getCotationSqlFilter($searchCotation);
     // Add where from extra fields
     include DOL_DOCUMENT_ROOT . '/core/tpl/extrafields_list_search_sql.tpl.php';
     // Add where from hooks
@@ -436,8 +437,9 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
         $num = $db->num_rows($resql);
     }
 
-    // Direct jump if only one record found
-    if ($num == 1 && ! empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && ! $page) {
+    // Direct jump if only one record found, out of reach once the page header has been printed : the redirect
+    // would only raise a "headers already sent" warning and leave the list truncated
+    if ($num == 1 && !headers_sent() && ! empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && ! $page) {
         $obj = $db->fetch_object($resql);
         $id  = $obj->rowid;
         header("Location: " . dol_buildpath('/digiriskdolibarr/view/digiriskelement/digiriskelement_risk.php', 1) . '?id=' . $id);
@@ -485,6 +487,11 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
         $sql .= " AND e.entity IN (" . $conf->entity . ")";
     }
     $sql .= ' AND r.type = "' . $riskType . '"';
+    // Archived risks live in the archive tab of the element, they are out of the active list
+    // unless the status filter explicitly asks for them
+    if ($search['status'] === '' || $search['status'] == -1) {
+        $sql .= ' AND r.status <> ' . Risk::STATUS_ARCHIVED;
+    }
 
     foreach ($search as $key => $val) {
         if ($key == 'status' && $search[$key] == -1) continue;
@@ -507,11 +514,12 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
             }
         }
     }
-    if ($search_all) $sql .= natural_search(array_keys($fieldstosearchall), $search_all);
+    if ($search_all) $sql .= $risk->getSearchAllSqlFilter($fieldstosearchall, $search_all);
 
     if (!empty($conf->categorie->enabled) && getDolGlobalInt('DIGIRISKDOLIBARR_CATEGORY_ON_RISK') > 0) {
         $sql .= Categorie::getFilterSelectQuery('risk', 'r.rowid', $search_category_array);
     }
+    $sql .= $risk->getCotationSqlFilter($searchCotation);
 
     // Add where from extra fields
     include DOL_DOCUMENT_ROOT . '/core/tpl/extrafields_list_search_sql.tpl.php';
@@ -554,8 +562,9 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
         $num = $db->num_rows($resql);
     }
 
-    // Direct jump if only one record found
-    if ($num == 1 && ! empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && ! $page) {
+    // Direct jump if only one record found, out of reach once the page header has been printed : the redirect
+    // would only raise a "headers already sent" warning and leave the list truncated
+    if ($num == 1 && !headers_sent() && ! empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && ! $page) {
         $obj = $db->fetch_object($resql);
         $id  = $obj->rowid;
         header("Location: " . dol_buildpath('/digiriskdolibarr/view/digiriskelement/digiriskelement_risk.php', 1) . '?id=' . $id);
@@ -573,19 +582,29 @@ foreach ($search as $key => $val) {
     if (is_array($search[$key]) && count($search[$key])) foreach ($search[$key] as $skey) $param .= '&search_' . $key . '[]=' . urlencode($skey);
     else $param                                                                                  .= '&search_' . $key . '=' . urlencode($search[$key]);
 }
+if ($searchCotation > 0 || $searchCotation == Risk::COTATION_NOT_ASSESSED) $param .= '&search_cotation=' . urlencode($searchCotation);
 // Add $param from extra fields
 include DOL_DOCUMENT_ROOT . '/core/tpl/extrafields_list_search_param.tpl.php';
 
 // List of mass actions available
 $arrayofmassactions = [];
-if ($permissiontodelete) {
-    $arrayofmassactions['predelete'] = '<span class="fa fa-trash paddingrightonly"></span>' . $langs->trans("Delete");
+if ($archivedRiskList) {
+    if ($permissiontoadd) {
+        $arrayofmassactions['unarchive'] = '<span class="fa fa-box-open paddingrightonly"></span>' . $langs->trans('Unarchive');
+    }
+} else {
+    if ($permissiontoadd) {
+        $arrayofmassactions['archive'] = '<span class="fa fa-archive paddingrightonly"></span>' . $langs->trans('Archive');
+    }
+    if ($permissiontodelete) {
+        $arrayofmassactions['predelete'] = '<span class="fa fa-trash paddingrightonly"></span>' . $langs->trans("Delete");
+    }
 }
 
 $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
 
 ?>
-<?php if (!$allRisks) : ?>
+<?php if (!$allRisks && !$archivedRiskList) : ?>
     <!-- BUTTON MODAL RISK ADD -->
     <?php if ($permissiontoadd) {
         $newcardbutton = '<div class="risk-add wpeo-button button-square-40 button-blue wpeo-tooltip-event modal-open"  aria-label="' . $langs->trans('AddRisk') . '"  value="' . $object->id . '">';
@@ -601,7 +620,7 @@ $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
 
         // Bouton importer des risques partagés : icône seule + texte en tooltip, à côté des boutons d'ajout (id conservé pour déclencher la popup de confirmation)
         if (!empty($conf->global->DIGIRISKDOLIBARR_SHOW_SHARED_RISKS)) {
-            $newcardbutton .= '<div class="import-shared-risks wpeo-button button-square-40 button-secondary wpeo-tooltip-event" id="actionButtonImportSharedRisks" style="margin-left: 10px;" aria-label="' . $langs->trans('ImportShared' . ucfirst($riskType) . 's') . '" value="' . $object->id . '">';
+            $newcardbutton .= '<div class="import-shared-risks wpeo-button button-square-40 button-secondary wpeo-tooltip-event" id="actionButtonImportSharedRisks" style="margin-left: 10px;" aria-label="' . digirisk_trans_risk_type('ImportShared', $riskType, 's') . '" value="' . $object->id . '">';
             $newcardbutton .= '<i class="fas fa-file-import button-icon"></i>';
             $newcardbutton .= '</div>';
         }
@@ -616,14 +635,14 @@ $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
         <div class="wpeo-modal modal-risk-0 modal-risk" id="risk_add<?php echo $object->id ?>" value="new">
             <div class="modal-container wpeo-modal-event">
                 <!-- Modal-Header -->
-                <div class="modal-header" style="align-items: center; display: flex;">
-                    <h2 class="modal-title" style="flex: 1;"><?php print $langs->trans('Add' . ucfirst($riskType) . 'Title') . ' ' . $refRiskMod->getNextValue($risk); ?></h2>
+                <div class="modal-header">
+                    <h2 class="modal-title"><?php print digirisk_trans_risk_type('Add', $riskType, 'Title') . ' ' . $refRiskMod->getNextValue($risk); ?></h2>
                     <?php if ($permissiontoadd) : ?>
-                        <div class="risk-create wpeo-button button-primary button-disable modal-close" style="margin-right: 15px; margin-bottom: 0;">
+                        <div class="risk-create wpeo-button button-primary button-disable modal-close modal-header-action">
                             <span><i class="fas fa-plus"></i>  <?php echo $langs->trans('AddRiskButton'); ?></span>
                         </div>
                     <?php else : ?>
-                        <div class="wpeo-button button-grey wpeo-tooltip-event" aria-label="<?php echo $langs->trans('PermissionDenied') ?>" style="margin-right: 15px; margin-bottom: 0;">
+                        <div class="wpeo-button button-grey wpeo-tooltip-event modal-header-action" aria-label="<?php echo $langs->trans('PermissionDenied') ?>">
                             <span><i class="fas fa-plus"></i>  <?php echo $langs->trans('AddRiskButton'); ?></span>
                         </div>
                     <?php endif;?>
@@ -653,7 +672,7 @@ $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
                             <span class="title"><?php echo $langs->trans('Risk'); ?><required>*</required></span>
                             <div class="wpeo-dropdown dropdown-large dropdown-grid category-danger padding">
                                 <input class="input-hidden-danger" type="hidden" name="risk_category_id" value="undefined" />
-                                <input class="input-risk-description-prefill" type="hidden" name="risk_description_prefill" value="<?php echo $conf->global->DIGIRISKDOLIBARR_RISK_DESCRIPTION_PREFILL; ?>" />
+                                <input class="input-risk-description-prefill" type="hidden" name="risk_description_prefill" value="<?php echo getDolGlobalInt('DIGIRISKDOLIBARR_RISK_DESCRIPTION_PREFILL'); ?>" />
                                 <div class="dropdown-toggle dropdown-add-button button-cotation">
                                     <span class="wpeo-button button-square-50 button-grey"><i class="fas fa-exclamation-triangle button-icon"></i><i class="fas fa-plus-circle button-add"></i></span>
                                     <img class="danger-category-pic wpeo-tooltip-event hidden" src="" aria-label=""/>
@@ -662,7 +681,7 @@ $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
                                     <?php
                                     if ( ! empty($dangerCategories) ) :
                                         foreach ($dangerCategories as $dangerCategory) : ?>
-                                            <li class="item dropdown-item wpeo-tooltip-event" data-is-preset="<?php echo ''; ?>" data-id="<?php echo $dangerCategory['position'] ?>" aria-label="<?php echo $dangerCategory['name'] ?>">
+                                            <li class="item dropdown-item wpeo-tooltip-event" data-is-preset="<?php echo ''; ?>" data-id="<?php echo $dangerCategory['position'] ?>" data-name="<?php echo dol_escape_htmltag($dangerCategory['name']) ?>" aria-label="<?php echo $risk->formatDangerCategoryTooltip($dangerCategory) ?>">
                                                 <img src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $dangerCategory['thumbnail_name'] . '.png'?>" class="attachment-thumbail size-thumbnail photo photowithmargin" alt="" loading="lazy" width="48" height="48">
                                             </li>
                                         <?php endforeach;
@@ -679,7 +698,7 @@ $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
                     </div>
                     <?php if (!empty($conf->categorie->enabled) && getDolGlobalInt('DIGIRISKDOLIBARR_CATEGORY_ON_RISK') > 0) : ?>
                         <div class="risk-categories"><span class="title"><?php echo $langs->trans("Categories"); ?></span>
-                            <?php $categoryArborescence = $form->select_all_categories('risk', '', 'parent', 64, 0, 1);
+                            <?php $categoryArborescence = $form->select_all_categories('digiriskrisk', '', 'parent', 64, 0, 1);
                             print img_picto('', 'category', 'class="pictofixedwidth"').$form->multiselectarray('categories', $categoryArborescence, GETPOST('categories', 'array'), '', 0, 'minwidth100imp widthcentpercentminusxx maxwidth400'); ?>
                             <a class="butActionNew" href="<?php echo DOL_URL_ROOT . '/categories/index.php?type=risk&backtopage=' . urlencode($_SERVER['PHP_SELF'] . '?action=create'); ?>" target="_blank">
                                 <span class="fa fa-plus-circle valignmiddle paddingleft" title="<?php echo $langs->trans('AddCategories'); ?>"></span>
@@ -687,7 +706,7 @@ $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
                         </div><hr>
                     <?php endif; ?>
                     <div class="risk-evaluation-container standard">
-                        <div class="risk-evaluation-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                        <div class="risk-evaluation-header risk-evaluation-header-split">
                             <div class="risk-evaluation-header-left">
                                 <?php if ($conf->global->DIGIRISKDOLIBARR_ADVANCED_RISKASSESSMENT_METHOD) : ?>
                                     <div class="wpeo-button evaluation-standard select-evaluation-method selected button-blue button-radius-2">
@@ -726,7 +745,7 @@ $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
                                                 <div class="element-linked-medias-list">
                                                     <?php
                                                     $relativepath = 'digiriskdolibarr/medias/thumbs';
-                                                    print saturne_show_medias_linked('digiriskdolibarr', $conf->digiriskdolibarr->multidir_output[$conf->entity] . '/riskassessment/tmp/RA0', 'small', 0, 0, 0, 0, $onPhone ? 40 : 50, $onPhone ? 40 : 50, 1, 0, 0, '/riskassessment/tmp/RA0');
+                                                    print saturne_show_medias_linked('digiriskdolibarr', $conf->digiriskdolibarr->multidir_output[$conf->entity] . '/riskassessment/tmp/RA0', 'small', 0, 0, 0, 0, $onPhone ? 40 : 50, $onPhone ? 40 : 50, 1, 0, 0, '/riskassessment/tmp/RA0', null, 'photo', 1, 1, 0, 0, '', 1, ['hideNoPhoto' => 1]);
                                                     ?>
                                                 </div>
                                             </td>
@@ -810,41 +829,42 @@ $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
                                 <?php print '<textarea class="evaluation-comment-textarea" name="evaluationComment' . $risk->id . '" cols="50" rows="' . ROWS_2 . '">' . ('') . '</textarea>' . "\n"; ?>
                             </div>
                         </div>
+                    </div>
                     <?php if ($conf->global->DIGIRISKDOLIBARR_TASK_MANAGEMENT) : ?>
                         <div class="riskassessment-task">
-                            <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                                <span class="section-title" style="margin-bottom: 0; margin-right: 15px; white-space: nowrap;"><?php echo $langs->trans('Task'); ?></span>
-                                <input type="text" class="widthcentpercent" name="label" value="" placeholder="<?php echo dol_escape_htmltag($langs->trans('Label')); ?>" style="flex-grow: 1; height: 30px; box-sizing: border-box; padding-left: 10px;">
+                            <div class="riskassessment-task-header">
+                                <span class="section-title"><?php echo $langs->trans('Task'); ?></span>
+                                <input type="text" class="widthcentpercent" name="label" value="" placeholder="<?php echo dol_escape_htmltag($langs->trans('Label')); ?>">
                             </div>
-                            <div class="wpeo-gridlayout grid-4" style="margin-top: 5px; align-items: center;">
+                            <div class="riskassessment-task-fields wpeo-gridlayout grid-4">
                                 <div>
-                                    <div style="position: relative;">
-                                        <i class="far fa-calendar-plus fa-fw" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #888;"></i>
-                                        <?php print '<input type="datetime-local" id="RiskassessmentTaskDateStartModalRisk" class="widthcentpercent" name="RiskassessmentTaskDateStartModalRisk" style="height: 30px; box-sizing: border-box; padding-left: 30px;" value="' . dol_print_date(dol_now('tzuser'), '%Y-%m-%dT%H:%M:%S') . '">'; ?>
+                                    <div class="riskassessment-task-field has-icon">
+                                        <i class="far fa-calendar-plus fa-fw riskassessment-task-field-icon"></i>
+                                        <?php print '<input type="datetime-local" id="RiskassessmentTaskDateStartModalRisk" class="widthcentpercent" name="RiskassessmentTaskDateStartModalRisk" value="' . dol_print_date(dol_now('tzuser'), '%Y-%m-%dT%H:%M:%S') . '">'; ?>
                                         <?php print '<input type="hidden" id="RiskassessmentTaskDateStartModalRiskhour" name="RiskassessmentTaskDateStartModalRiskhour" value="' . dol_print_date(dol_now('tzuser'), '%H') . '">'; ?>
                                         <?php print '<input type="hidden" id="RiskassessmentTaskDateStartModalRiskmin" name="RiskassessmentTaskDateStartModalRiskmin" value="' . dol_print_date(dol_now('tzuser'), '%M') . '">'; ?>
                                     </div>
                                 </div>
                                 <div>
-                                    <div style="position: relative;">
-                                        <i class="far fa-calendar-check fa-fw" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #888;"></i>
-                                        <?php print '<input type="datetime-local" id="RiskassessmentTaskDateEndModalRisk" class="widthcentpercent" name="RiskassessmentTaskDateEndModalRisk" style="height: 30px; box-sizing: border-box; padding-left: 30px;">'; ?>
+                                    <div class="riskassessment-task-field has-icon">
+                                        <i class="far fa-calendar-check fa-fw riskassessment-task-field-icon"></i>
+                                        <?php print '<input type="datetime-local" id="RiskassessmentTaskDateEndModalRisk" class="widthcentpercent" name="RiskassessmentTaskDateEndModalRisk">'; ?>
                                         <?php print '<input type="hidden" id="RiskassessmentTaskDateEndModalRiskhour" name="RiskassessmentTaskDateEndModalRiskhour" value="">'; ?>
                                         <?php print '<input type="hidden" id="RiskassessmentTaskDateEndModalRiskmin" name="RiskassessmentTaskDateEndModalRiskmin" value="">'; ?>
                                     </div>
                                 </div>
                                 <div>
-                                    <div style="display: flex; align-items: center; gap: 5px; height: 30px;">
-                                        <i class="fas fa-user-tie fa-fw" style="color: #888;"></i>
-                                        <div style="flex-grow: 1; min-width: 0;">
+                                    <div class="riskassessment-task-executive">
+                                        <i class="fas fa-user-tie fa-fw riskassessment-task-field-icon"></i>
+                                        <div class="riskassessment-task-executive-select">
                                             <?php print saturne_select_users('executive_id', 0, $langs->trans('Responsible'), 'executiveSelect widthcentpercent'); ?>
                                         </div>
                                     </div>
                                 </div>
                                 <div>
-                                    <div style="position: relative;">
-                                        <input type="text" class="riskassessment-task-budget widthcentpercent" name="budget" value="" placeholder="<?php echo dol_escape_htmltag($langs->trans('Budget')); ?>" style="height: 30px; box-sizing: border-box; padding-left: 10px; padding-right: 20px;">
-                                        <span style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-weight: bold;">&euro;</span>
+                                    <div class="riskassessment-task-field">
+                                        <input type="text" class="riskassessment-task-budget widthcentpercent" name="budget" value="" placeholder="<?php echo dol_escape_htmltag($langs->trans('Budget')); ?>">
+                                        <span class="riskassessment-task-budget-currency">&euro;</span>
                                     </div>
                                 </div>
                             </div>
@@ -857,7 +877,7 @@ $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
     </div>
 <?php endif; ?>
     <input type="hidden" id="dol_url_root" value="<?php echo DOL_URL_ROOT; ?>">
-<?php $title = $langs->trans('DigiriskElement' . ucfirst($riskType) . 'sList');
+<?php $title = $archivedRiskList ? $langs->trans('ArchivedRisks') : digirisk_trans_risk_type('DigiriskElement', $riskType, 'sList');
 print '<div class="div-title-and-table-responsive">';
 print_barre_liste($title, $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, $massactionbutton, $num, $nbtotalofrecords, $risk->picto, 0, $newcardbutton ?? '', '', $limit, 0, 0, 1);
 
@@ -887,7 +907,7 @@ else $moreforfilter                  = $hookmanager->resPrint;
 // Filter on categories
 if (!empty($conf->categorie->enabled) && $user->rights->categorie->lire && getDolGlobalInt('DIGIRISKDOLIBARR_CATEGORY_ON_RISK') > 0) {
     $formcategory   = new FormCategory($db);
-    $moreforfilter  = $formcategory->getFilterBox('risk', $search_category_array);
+    $moreforfilter  = $formcategory->getFilterBox('digiriskrisk', $search_category_array);
 }
 
 if ( ! empty($moreforfilter)) {
@@ -928,7 +948,7 @@ foreach ($risk->fields as $key => $val) {
                         <img class="danger-category-pic wpeo-tooltip-event hidden" src="" aria-label=""/>
                     </div>
                 <?php else : ?>
-                    <div class="dropdown-toggle dropdown-add-button button-cotation wpeo-tooltip-event" aria-label="<?php echo (empty(dol_escape_htmltag($search[$key]))) ? $risk->getDangerCategoryName($risk, $riskType) : $risk->getDangerCategoryNameByPosition($search[$key], $riskType); ?>">
+                    <div class="dropdown-toggle dropdown-add-button button-cotation wpeo-tooltip-event" aria-label="<?php echo (empty(dol_escape_htmltag($search[$key]))) ? $risk->getDangerCategoryTooltip($risk, $riskType) : $risk->getDangerCategoryTooltipByPosition($search[$key], $riskType); ?>">
                         <img class="danger-category-pic tooltip hover" src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . ((empty(dol_escape_htmltag($search[$key]))) ? $risk->getDangerCategory($risk, $riskType) : $risk->getDangerCategoryByPosition($search[$key], $riskType)) . '.png'?>" />
                     </div>
                 <?php endif; ?>
@@ -936,7 +956,7 @@ foreach ($risk->fields as $key => $val) {
                     <?php
                     if ( ! empty($dangerCategories) ) :
                         foreach ($dangerCategories as $dangerCategory) : ?>
-                            <li class="item dropdown-item wpeo-tooltip-event classfortooltip" data-is-preset="<?php echo ''; ?>" data-id="<?php echo $dangerCategory['position'] ?>" aria-label="<?php echo $dangerCategory['name'] ?>">
+                            <li class="item dropdown-item wpeo-tooltip-event classfortooltip" data-is-preset="<?php echo ''; ?>" data-id="<?php echo $dangerCategory['position'] ?>" data-name="<?php echo dol_escape_htmltag($dangerCategory['name']) ?>" aria-label="<?php echo $risk->formatDangerCategoryTooltip($dangerCategory) ?>">
                                 <img src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $dangerCategory['thumbnail_name'] . '.png'?>" class="attachment-thumbail size-thumbnail photo photowithmargin" alt="" loading="lazy" width="48" height="48">
                             </li>
                         <?php endforeach;
@@ -953,6 +973,14 @@ foreach ($evaluation->fields as $key => $val) {
     if ($key == 'status') $cssforfield .= ($cssforfield ? ' ' : '') . 'center';
     if ( ! empty($arrayfields['evaluation.' . $key]['checked'])) {
         print '<td class="liste_titre' . '">';
+        if ($key == 'cotation') {
+            $cotationLabels = [];
+            foreach ($risk->getCotations() as $cotationLevel => $cotation) {
+                $cotationLabels[$cotationLevel] = $cotation['label'];
+            }
+            $cotationLabels[Risk::COTATION_NOT_ASSESSED] = $langs->trans('RisksNotAssessed');
+            print $form->selectarray('search_cotation', $cotationLabels, $searchCotation, 1, 0, 0, '', 0, 0, 0, '', 'maxwidth100');
+        }
         print '</td>';
     }
 }
@@ -1054,7 +1082,7 @@ while ($i < ($limit ? min($num, $limit) : $num)) {
                 }
             } elseif ($key == 'category') { ?>
                 <div class="table-cell table-50 cell-risk" data-title="Risque">
-                    <div class="wpeo-dropdown dropdown-large category-danger padding wpeo-tooltip-event" aria-label="<?php echo $risk->getDangerCategoryName($risk, $riskType) ?>">
+                    <div class="wpeo-dropdown dropdown-large category-danger padding wpeo-tooltip-event" aria-label="<?php echo $risk->getDangerCategoryTooltip($risk, $riskType) ?>">
                         <img class="danger-category-pic hover" src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $risk->getDangerCategory($risk, $riskType) . '.png' ; ?>"/>
                     </div>
                 </div>
@@ -1065,13 +1093,13 @@ while ($i < ($limit ? min($num, $limit) : $num)) {
                     <!-- BUTTON MODAL RISK EDIT -->
                     <?php if ($permissiontoadd) : ?>
                         <div><?php
-                            echo $risk->getNomUrl(1, 'nolink'); ?>
+                            echo $risk->getNomUrl(1); ?>
                             <i class="risk-edit wpeo-tooltip-event modal-open fas fa-pencil-alt" aria-label="<?php echo $langs->trans('EditRisk'); ?>" value="<?php echo $risk->id; ?>" id="<?php echo $risk->ref; ?>">
                                 <input type="hidden" class="modal-options" data-modal-to-open="risk_edit<?php echo $risk->id ?>" data-from-id="<?php echo $risk->id ?>" data-from-type="risk" data-from-subtype="" data-from-subdir=""/>
                             </i>
                         </div>
                     <?php else : ?>
-                        <div class="risk-edit-no-perm" value="<?php echo $risk->id ?>"><?php echo $risk->getNomUrl(1, 'nolink'); ?></div>
+                        <div class="risk-edit-no-perm" value="<?php echo $risk->id ?>"><?php echo $risk->getNomUrl(1); ?></div>
                     <?php endif; ?>
                     <!-- RISK EDIT MODAL -->
                     <div id="risk_edit<?php echo $risk->id ?>" class="wpeo-modal modal-risk-<?php echo $risk->id ?>">
@@ -1102,7 +1130,7 @@ while ($i < ($limit ? min($num, $limit) : $num)) {
 
                                             <input class="input-hidden-danger" type="hidden" name="risk_category_id" value=<?php echo $risk->category ?> />
                                             <div class="dropdown-toggle dropdown-add-button button-cotation">
-                                                <img class="danger-category-pic tooltip wpeo-tooltip-event hover" src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $risk->getDangerCategory($risk, $riskType) . '.png'?>" aria-label="<?php echo $risk->getDangerCategoryName($risk, $riskType) ?>">
+                                                <img class="danger-category-pic tooltip wpeo-tooltip-event hover" src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $risk->getDangerCategory($risk, $riskType) . '.png'?>" aria-label="<?php echo $risk->getDangerCategoryTooltip($risk, $riskType) ?>">
                                             </div>
 
                                             <?php if ($conf->global->DIGIRISKDOLIBARR_RISK_CATEGORY_EDIT) : ?>
@@ -1110,7 +1138,7 @@ while ($i < ($limit ? min($num, $limit) : $num)) {
                                                     <?php
                                                     if ( ! empty($dangerCategories) ) :
                                                         foreach ($dangerCategories as $dangerCategory) : ?>
-                                                            <li class="item dropdown-item wpeo-tooltip-event classfortooltip" data-is-preset="<?php echo ''; ?>" data-id="<?php echo $dangerCategory['position'] ?>" aria-label="<?php echo $dangerCategory['name'] ?>">
+                                                            <li class="item dropdown-item wpeo-tooltip-event classfortooltip" data-is-preset="<?php echo ''; ?>" data-id="<?php echo $dangerCategory['position'] ?>" data-name="<?php echo dol_escape_htmltag($dangerCategory['name']) ?>" aria-label="<?php echo $risk->formatDangerCategoryTooltip($dangerCategory) ?>">
                                                                 <img src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $dangerCategory['thumbnail_name'] . '.png'?>" class="attachment-thumbail size-thumbnail photo photowithmargin" alt="" loading="lazy" width="48" height="48">
                                                             </li>
                                                         <?php endforeach;
@@ -1143,9 +1171,9 @@ while ($i < ($limit ? min($num, $limit) : $num)) {
                                 // Tags-Categories
                                 if ($conf->categorie->enabled && getDolGlobalInt('DIGIRISKDOLIBARR_CATEGORY_ON_RISK') > 0) {
                                     print '<div class="risk-categories"><span class="title">'.$langs->trans("Categories").'</span>';
-                                    $categoryArborescence = $form->select_all_categories('risk', '', 'parent', 64, 0, 1);
+                                    $categoryArborescence = $form->select_all_categories('digiriskrisk', '', 'parent', 64, 0, 1);
                                     $c                    = new Categorie($db);
-                                    $cats                 = $c->containing($risk->id, 'risk');
+                                    $cats                 = $c->containing($risk->id, 'digiriskrisk');
                                     $arrayselected        = [];
                                     if (is_array($cats)) {
                                         foreach ($cats as $cat) {

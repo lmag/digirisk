@@ -243,6 +243,32 @@ class pdf_preventionplandocument extends SaturneDocumentModel
     }
 
     /**
+     * Paragraphe issu d'un champ WYSIWYG : le HTML est rendu tel quel (gras, italique, listes).
+     *
+     * @param  TCPDF  $pdf   PDF handler
+     * @param  string $html  Contenu HTML
+     * @param  float  $size  Taille de police
+     * @param  array  $color Couleur du texte
+     * @return void
+     */
+    protected function htmlParagraph($pdf, string $html, float $size, array $color = [60, 60, 60])
+    {
+        if (!dol_strlen($html)) {
+            return;
+        }
+
+        // getNumLines ne sait pas mesurer du HTML : la hauteur est estimee sur le texte brut
+        $height = $pdf->getNumLines(saturne_flatten_wysiwyg_blocks($html, true), $this->contentWidth($pdf)) * $this->height;
+        $this->checkPageBreak($pdf, $height);
+
+        $pdf->SetFont('', '', $size);
+        $pdf->SetTextColor($color[0], $color[1], $color[2]);
+        $pdf->writeHTMLCell($this->contentWidth($pdf), $this->height, $this->marge_gauche, $pdf->GetY(), $html, 0, 1, false, true, 'L');
+        $pdf->SetTextColor(0, 0, 0);
+        $pdf->Ln(1);
+    }
+
+    /**
      * Tableau generique.
      *
      * $rows est une liste de lignes, chaque ligne une liste de cellules. Une cellule est une
@@ -414,7 +440,7 @@ class pdf_preventionplandocument extends SaturneDocumentModel
 
         $pdf->SetFont('', 'B', $size + 6);
         $pdf->SetTextColor($this->accent[0], $this->accent[1], $this->accent[2]);
-        $pdf->SetXY($this->marge_gauche, $posY + 14);
+        $pdf->SetXY($this->marge_gauche, $posY + 2);
         $pdf->Cell($this->contentWidth($pdf), 9, $outputLangs->transnoentities('PreventionPlan'), 0, 1, 'C');
         $pdf->SetTextColor(0, 0, 0);
 
@@ -512,6 +538,8 @@ class pdf_preventionplandocument extends SaturneDocumentModel
         require_once __DIR__ . '/../../../../../class/digiriskelement.class.php';
         require_once __DIR__ . '/../../../../../lib/digiriskdolibarr_mobile.lib.php';
 
+        $moreParam = self::getMoreParam($objectDocument, $moreParam);
+
         $object = $moreParam['object'];
 
         $outputLangs->loadLangs(['companies', 'projects', 'other', 'digiriskdolibarr@digiriskdolibarr']);
@@ -519,10 +547,17 @@ class pdf_preventionplandocument extends SaturneDocumentModel
         $moreParam['hideTemplateName'] = 1;
         $object->module                = $this->module;
 
+        $refOrig = $object->ref;
+        if (preg_match('/^specimen/i', $object->ref)) {
+            $object->ref = 'specimen';
+        }
+
         // buildDocumentFilename rend -1 en cas d'echec, sinon le chemin du fichier. Comparer ce
         // chemin a 0 le compare en fait a la chaine '0' : sous Linux il commence par '/', qui est
         // inferieur a '0', et la generation echouerait systematiquement
         $file = $this->buildDocumentFilename($objectDocument, $outputLangs, $object, $moreParam);
+        
+        $object->ref = $refOrig;
         if (!is_string($file) || empty($file)) {
             $this->error = $langs->transnoentities('ErrorFileNameCanNotBeBuilt');
             return -1;
@@ -576,7 +611,7 @@ class pdf_preventionplandocument extends SaturneDocumentModel
         $this->sectionPriorVisit($pdf, $object, $data, $outputLangs, $size);
         $this->sectionIntervention($pdf, $object, $outputLangs, $size);
         $this->sectionRisks($pdf, $object, $outputLangs, $size);
-        $this->sectionAttendants($pdf, $object, $outputLangs, $size);
+        $this->sectionCertifications($pdf, $object, $outputLangs, $size);
         $this->sectionSignatures($pdf, $object, $outputLangs, $size);
 
         $this->_pagefooter($pdf, $object, $outputLangs, $size);
@@ -805,7 +840,7 @@ class pdf_preventionplandocument extends SaturneDocumentModel
 
         if (dol_strlen($object->prior_visit_text)) {
             $this->paragraph($pdf, $outputLangs->transnoentities('PriorVisitComments'), $size - 1, 'B', [40, 40, 40]);
-            $this->paragraph($pdf, dol_string_nohtmltag($object->prior_visit_text, 0), $size - 1, '', [40, 40, 40]);
+            $this->htmlParagraph($pdf, $object->prior_visit_text, $size - 1, [40, 40, 40]);
         }
     }
 
@@ -1214,46 +1249,32 @@ class pdf_preventionplandocument extends SaturneDocumentModel
      * @param  float     $size        Taille de police
      * @return void
      */
-    protected function sectionAttendants($pdf, $object, Translate $outputLangs, float $size)
+    protected function sectionCertifications($pdf, $object, Translate $outputLangs, float $size)
     {
-        // Les signataires ne sont pas dans le JSON du document : on les lit a la source
-        $signatory   = new SaturneSignature($this->db, $this->module, $object->element);
-        $signatories = $signatory->fetchSignatories($object->id, $object->element);
-        $attendants  = [];
-        if (is_array($signatories)) {
-            foreach ($signatories as $item) {
-                if ($item->role != 'MasterWorker') {
-                    $attendants[] = $item;
-                }
-            }
-        }
-        if (empty($attendants)) {
+        $mobileCertifications = !empty($object->array_options['options_mobile_certifications']) ? json_decode($object->array_options['options_mobile_certifications'], true) : [];
+        if (empty($mobileCertifications)) {
             return;
         }
 
-        $this->sectionTitle($pdf, $outputLangs->transnoentities('PreventionPlanAttendants'), $size);
+        require_once dol_buildpath('/digiriskdolibarr/lib/digiriskdolibarr_mobile.lib.php', 0);
+        $certificationOptions = digiriskGetCertificationOptions(false);
+
+        $this->sectionTitle($pdf, $outputLangs->transnoentities('MobilePPCertifications'), $size);
 
         $width  = $this->contentWidth($pdf);
-        $widths = [$width * 0.20, $width * 0.20, $width * 0.30, $width * 0.18, $width * 0.12];
+        $widths = [$width * 0.85, $width * 0.15];
         $header = [
-            $outputLangs->transnoentities('Lastname'),
-            $outputLangs->transnoentities('Firstname'),
-            $outputLangs->transnoentities('Email'),
-            $outputLangs->transnoentities('Phone'),
-            $outputLangs->transnoentities('Status'),
+            $outputLangs->transnoentities('Label'),
+            $outputLangs->transnoentities('MobilePPMandatory')
         ];
 
         $rows = [];
-        foreach ($attendants as $attendant) {
-            if (!is_object($attendant)) {
-                continue;
-            }
+        foreach ($mobileCertifications as $mobileCertification) {
+            $certLabel = isset($certificationOptions[$mobileCertification['code']]) ? $certificationOptions[$mobileCertification['code']] : $mobileCertification['code'];
+            $mandatoryLabel = !empty($mobileCertification['mandatory']) ? $outputLangs->transnoentities('Yes') : $outputLangs->transnoentities('No');
             $rows[] = [
-                dol_strtoupper($attendant->lastname ?? ''),
-                ucfirst($attendant->firstname ?? ''),
-                $attendant->email ?? '',
-                $attendant->phone ?? '',
-                ['text' => $this->signatoryStatus($attendant, $outputLangs), 'align' => 'C'],
+                $certLabel,
+                ['text' => $mandatoryLabel, 'align' => 'C']
             ];
         }
 
@@ -1289,13 +1310,15 @@ class pdf_preventionplandocument extends SaturneDocumentModel
     {
         // Le JSON du document ne porte pas les signataires : on les lit par leur role, sinon les
         // deux encadres restent vides alors que l'EU a signe des la creation
+        global $conf;
+
         $signatory = new SaturneSignature($this->db, $this->module, $object->element);
-
-        $masters  = $signatory->fetchSignatory('MasterWorker', $object->id, $object->element);
-        $master   = (is_array($masters) && !empty($masters)) ? array_shift($masters) : null;
-
+        
+        $masters   = $signatory->fetchSignatory('MasterWorker', $object->id, $object->element);
         $exteriors = $signatory->fetchSignatory('ExtSocietyResponsible', $object->id, $object->element);
-        $exterior  = (is_array($exteriors) && !empty($exteriors)) ? array_shift($exteriors) : null;
+
+        $master   = (is_array($masters) && !empty($masters)) ? array_shift($masters) : null;
+        $exterior = (is_array($exteriors) && !empty($exteriors)) ? array_shift($exteriors) : null;
 
         $gap       = 6;
         $boxWidth  = ($this->contentWidth($pdf) - $gap) / 2;
@@ -1372,16 +1395,18 @@ class pdf_preventionplandocument extends SaturneDocumentModel
             return '';
         }
 
-        $parts = explode(',', $signatory->signature);
-        if (count($parts) < 2) {
-            return '';
+        $imagePath = tempnam(sys_get_temp_dir(), 'sig_');
+        // TCPDF requires an extension to determine image type. We rename the temp file to have a .png extension.
+        rename($imagePath, $imagePath . '.png');
+        $imagePath .= '.png';
+
+        $signatureData = explode(',', $signatory->signature);
+        if (count($signatureData) > 1) {
+            file_put_contents($imagePath, base64_decode($signatureData[1]));
+        } else {
+            file_put_contents($imagePath, base64_decode($signatory->signature));
         }
 
-        $path = $this->tmpDir . '/signature_' . ((int) ($signatory->id ?? 0)) . '.png';
-        if (file_put_contents($path, base64_decode($parts[1])) === false) {
-            return '';
-        }
-
-        return $path;
+        return $imagePath;
     }
 }

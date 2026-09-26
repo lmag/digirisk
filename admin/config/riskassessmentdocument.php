@@ -298,13 +298,13 @@ if (isModEnabled('project')) {
 	$langs->load("projects");
 	print '<tr class="oddeven"><td><label for="DUProject">' . $langs->trans("DUProject") . '</label></td><td>';
 	$formproject->select_projects(-1,  $conf->global->DIGIRISKDOLIBARR_DU_PROJECT, 'DUProject', 0, 0, 0, 0, 0, 0, 0, '', 0, 0, 'maxwidth500');
-	print ' <a href="' . DOL_URL_ROOT . '/projet/card.php?socid=' . $soc->id . '&action=create&status=1&backtopage=' . urlencode($_SERVER["PHP_SELF"] . '?action=create&socid=' . $soc->id) . '"><span class="fa fa-plus-circle valignmiddle" title="' . $langs->trans("AddProject") . '"></span></a>';
+	print ' <a href="' . DOL_URL_ROOT . '/projet/card.php?action=create&status=1&backtopage=' . urlencode($_SERVER["PHP_SELF"]) . '"><span class="fa fa-plus-circle valignmiddle" title="' . $langs->trans("AddProject") . '"></span></a>';
 	print '<td><input type="submit" class="button" name="save" value="' . $langs->trans("Save") . '">';
 	print '</td></tr>';
 
     print '<tr class="oddeven"><td><label for="EnvironmentProject">' . $langs->trans("EnvironmentProject") . '</label></td><td>';
     $formproject->select_projects(-1,  $conf->global->DIGIRISKDOLIBARR_ENVIRONMENT_PROJECT, 'EnvironmentProject', 0, 0, 0, 0, 0, 0, 0, '', 0, 0, 'maxwidth500');
-    print ' <a href="' . DOL_URL_ROOT . '/projet/card.php?socid=' . $soc->id . '&action=create&status=1&backtopage=' . urlencode($_SERVER["PHP_SELF"] . '?action=create&socid=' . $soc->id) . '"><span class="fa fa-plus-circle valignmiddle" title="' . $langs->trans("AddProject") . '"></span></a>';
+    print ' <a href="' . DOL_URL_ROOT . '/projet/card.php?action=create&status=1&backtopage=' . urlencode($_SERVER["PHP_SELF"]) . '"><span class="fa fa-plus-circle valignmiddle" title="' . $langs->trans("AddProject") . '"></span></a>';
     print '<td><input type="submit" class="button" name="save" value="' . $langs->trans("Save") . '">';
     print '</td></tr>';
 
@@ -332,11 +332,13 @@ $constArray[$moduleNameLowerCase] = [
 		'name'        => 'ShowTaskStartDate',
 		'description' => 'ShowTaskStartDateDescription',
 		'code'        => 'DIGIRISKDOLIBARR_SHOW_TASK_START_DATE',
+		'tutoImage'   => digiriskdolibarr_tuto_image('riskassessmentdocument', 'date_start', $langs->trans('ShowTaskStartDate')),
 	],
 	'ShowTaskEndDate' => [
 		'name'        => 'ShowTaskEndDate',
 		'description' => 'ShowTaskEndDateDescription',
 		'code'        => 'DIGIRISKDOLIBARR_SHOW_TASK_END_DATE',
+		'tutoImage'   => digiriskdolibarr_tuto_image('riskassessmentdocument', 'date_end', $langs->trans('ShowTaskEndDate')),
 	],
 	'ShowTasksDone' => [
 		'name'        => 'ShowTasksDone',
@@ -347,6 +349,7 @@ $constArray[$moduleNameLowerCase] = [
 		'name'        => 'ShowTaskCalculatedProgress',
 		'description' => 'ShowTaskCalculatedProgressDescription',
 		'code'        => 'DIGIRISKDOLIBARR_SHOW_TASK_CALCULATED_PROGRESS',
+		'tutoImage'   => digiriskdolibarr_tuto_image('riskassessmentdocument', 'progress', $langs->trans('ShowTaskCalculatedProgress')),
 	],
 	'ShowAllTasks' => [
 		'name'        => 'ShowAllTasks',
@@ -357,25 +360,32 @@ $constArray[$moduleNameLowerCase] = [
         'name'        => 'TaskHideRefInDocument',
         'description' => 'TaskHideRefInDocumentDescription',
         'code'        => 'DIGIRISKDOLIBARR_TASK_HIDE_REF_IN_DOCUMENT',
+        'tutoImage'   => digiriskdolibarr_tuto_image('riskassessmentdocument', 'ref', $langs->trans('TaskHideRefInDocument')),
     ],
     'TaskHideResponsibleInDocument' => [
         'name'        => 'TaskHideResponsibleInDocument',
         'description' => 'TaskHideResponsibleInDocumentDescription',
         'code'        => 'DIGIRISKDOLIBARR_TASK_HIDE_RESPONSIBLE_IN_DOCUMENT',
+        'tutoImage'   => digiriskdolibarr_tuto_image('riskassessmentdocument', 'responsible', $langs->trans('TaskHideResponsibleInDocument')),
     ],
     'TaskHideDateInDocument' => [
         'name'        => 'TaskHideDateInDocument',
         'description' => 'TaskHideDateInDocumentDescription',
         'code'        => 'DIGIRISKDOLIBARR_TASK_HIDE_DATE_IN_DOCUMENT',
+        'tutoImage'   => digiriskdolibarr_tuto_image('riskassessmentdocument', 'date', $langs->trans('TaskHideDateInDocument')),
     ],
     'TaskHideBudgetInDocument' => [
         'name'        => 'TaskHideBudgetInDocument',
         'description' => 'TaskHideBudgetInDocumentDescription',
         'code'        => 'DIGIRISKDOLIBARR_TASK_HIDE_BUDGET_IN_DOCUMENT',
+        'tutoImage'   => digiriskdolibarr_tuto_image('riskassessmentdocument', 'budget', $langs->trans('TaskHideBudgetInDocument')),
     ]
 ];
 
 require __DIR__ . '/../../../saturne/core/tpl/admin/object/object_const_view.tpl.php';
+
+// Click on a tuto image to display it full size
+digiriskdolibarr_tuto_overlay();
 
 print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
 print '<input type="hidden" name="token" value="' . newToken() . '">';

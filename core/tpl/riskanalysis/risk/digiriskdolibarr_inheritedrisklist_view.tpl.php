@@ -35,22 +35,17 @@
 
 		// Reuse the data already loaded by the main risk list when both are rendered on the same
 		// page (same variable names); only load what is missing so these full "load all" queries
-		// (users, riskassessments, tasks, time spent) are not run a second time.
-		if (!isset($riskAssessmentList))      $riskAssessmentList      = $riskAssessment->fetchAll();
+		// (tasks, time spent) are not run a second time.
 		if (!isset($riskAssessmentNextValue)) $riskAssessmentNextValue = $refEvaluationMod->getNextValue($evaluation);
 		if (!isset($riskAssessmentTaskList))  $riskAssessmentTaskList  = $risk->getTasksWithFkRisk();
 		if (!isset($taskNextValue))           $taskNextValue           = $refTaskMod->getNextValue('', $task);
-		if (!isset($usersList)) {
-			$usertmp->fetchAll();
-			$usersList = $usertmp->users;
-		}
 		if (!isset($timeSpentSortedByTasks))  $timeSpentSortedByTasks  = $digiriskTask->fetchAllTimeSpentAllUsers('AND fk_element > 0', 'element_datehour', 'DESC', 1);
 
-		if (!isset($riskAssessmentsOrderedByRisk) && is_array($riskAssessmentList) && !empty($riskAssessmentList)) {
-			foreach ($riskAssessmentList as $riskAssessmentSingle) {
-				$riskAssessmentsOrderedByRisk[$riskAssessmentSingle->fk_risk][$riskAssessmentSingle->id] = $riskAssessmentSingle;
-			}
-		}
+		// The list is paginated and both collections are only read by id, so they load their
+		// entries on demand instead of instantiating every user and every risk assessment of
+		// the database; both are memoized per request, so the main list shares them
+		$usersList                    = digirisk_get_user_list();
+		$riskAssessmentsOrderedByRisk = digirisk_get_risk_assessments_by_risk();
 		// Build and execute select
 		// --------------------------------------------------------------------
 		if (!preg_match('/(evaluation)/', $sortfield)) {
@@ -120,7 +115,7 @@
 					}
 				}
 			}
-			if ($search_all) $sql .= natural_search(array_keys($fieldstosearchall), $search_all);
+			if ($search_all) $sql .= $risk->getSearchAllSqlFilter($fieldstosearchall, $search_all);
 			// Add where from extra fields
 			include DOL_DOCUMENT_ROOT . '/core/tpl/extrafields_list_search_sql.tpl.php';
 			// Add where from hooks
@@ -158,8 +153,9 @@
 				$num = $db->num_rows($resql);
 			}
 
-			// Direct jump if only one record found
-			if ($num == 1 && !empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && !$page) {
+			// Direct jump if only one record found, out of reach once the page header has been printed : the redirect
+			// would only raise a "headers already sent" warning and leave the list truncated
+			if ($num == 1 && !headers_sent() && !empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && !$page) {
 				$obj = $db->fetch_object($resql);
 				$id = $obj->rowid;
 				header("Location: " . dol_buildpath('/digiriskdolibarr/view/digiriskelement/digiriskelement_risk.php', 1) . '?id=' . $id);
@@ -234,7 +230,7 @@
 					}
 				}
 			}
-			if ($search_all) $sql .= natural_search(array_keys($fieldstosearchall), $search_all);
+			if ($search_all) $sql .= $risk->getSearchAllSqlFilter($fieldstosearchall, $search_all);
 			// Add where from extra fields
 			include DOL_DOCUMENT_ROOT . '/core/tpl/extrafields_list_search_sql.tpl.php';
 			// Add where from hooks
@@ -272,8 +268,9 @@
 				$num = $db->num_rows($resql);
 			}
 
-			// Direct jump if only one record found
-			if ($num == 1 && !empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && !$page) {
+			// Direct jump if only one record found, out of reach once the page header has been printed : the redirect
+			// would only raise a "headers already sent" warning and leave the list truncated
+			if ($num == 1 && !headers_sent() && !empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && !$page) {
 				$obj = $db->fetch_object($resql);
 				$id = $obj->rowid;
 				header("Location: " . dol_buildpath('/digiriskdolibarr/view/digiriskelement/digiriskelement_risk.php', 1) . '?id=' . $id);
@@ -302,7 +299,7 @@
 	$arrayofmassactions = [];
     $massactionbutton   = $form->selectMassAction('', $arrayofmassactions);
 
-	$title = $langs->trans('DigiriskElementInherited' . ucfirst($riskType) . 'sList');
+	$title = digirisk_trans_risk_type('DigiriskElementInherited', $riskType, 'sList');
 	print_barre_liste($title, $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, $massactionbutton, $num, $nbtotalofrecords, 'digiriskdolibarr_color.png@digiriskdolibarr', 0, '', '', $limit, 0, 0, 1);
 
 	include DOL_DOCUMENT_ROOT . '/core/tpl/massactions_pre.tpl.php';
@@ -363,7 +360,7 @@
 							<img class="danger-category-pic wpeo-tooltip-event hidden" src="" aria-label=""/>
 						</div>
 					<?php else : ?>
-						<div class="dropdown-toggle dropdown-add-button button-cotation wpeo-tooltip-event" aria-label="<?php echo (empty(dol_escape_htmltag($search[$key]))) ? $risk->getDangerCategoryName($risk, $riskType) : $risk->getDangerCategoryNameByPosition($search[$key], $riskType); ?>">
+						<div class="dropdown-toggle dropdown-add-button button-cotation wpeo-tooltip-event" aria-label="<?php echo (empty(dol_escape_htmltag($search[$key]))) ? $risk->getDangerCategoryTooltip($risk, $riskType) : $risk->getDangerCategoryTooltipByPosition($search[$key], $riskType); ?>">
 							<img class="danger-category-pic tooltip hover" src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . ((empty(dol_escape_htmltag($search[$key]))) ? $risk->getDangerCategory($risk, $riskType) : $risk->getDangerCategoryByPosition($search[$key], $riskType)) . '.png'?>" />
 						</div>
 					<?php endif; ?>
@@ -372,7 +369,7 @@
 						$dangerCategories = Risk::getDangerCategories($riskType);
 						if ( ! empty($dangerCategories) ) :
 							foreach ($dangerCategories as $dangerCategory) : ?>
-								<li class="item dropdown-item wpeo-tooltip-event classfortooltip" data-is-preset="<?php echo ''; ?>" data-id="<?php echo $dangerCategory['position'] ?>" aria-label="<?php echo $dangerCategory['name'] ?>">
+								<li class="item dropdown-item wpeo-tooltip-event classfortooltip" data-is-preset="<?php echo ''; ?>" data-id="<?php echo $dangerCategory['position'] ?>" data-name="<?php echo dol_escape_htmltag($dangerCategory['name']) ?>" aria-label="<?php echo $risk->formatDangerCategoryTooltip($dangerCategory) ?>">
 									<img src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $dangerCategory['thumbnail_name'] . '.png'?>" class="attachment-thumbail size-thumbnail photo photowithmargin" alt="" loading="lazy" width="48" height="48">
 								</li>
 							<?php endforeach;
@@ -476,13 +473,13 @@
 					}
 				} elseif ($key == 'category') { ?>
 					<div class="table-cell table-50 cell-risk" data-title="Risque">
-						<div class="wpeo-dropdown dropdown-large category-danger padding wpeo-tooltip-event" aria-label="<?php echo $risk->getDangerCategoryName($risk, $riskType) ?>">
+						<div class="wpeo-dropdown dropdown-large category-danger padding wpeo-tooltip-event" aria-label="<?php echo $risk->getDangerCategoryTooltip($risk, $riskType) ?>">
 							<img class="danger-category-pic hover" src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $risk->getDangerCategory($risk, $riskType) . '.png' ; ?>"/>
 						</div>
 					</div>
 					<?php
 				} elseif ($key == 'ref') {
-					print $risk->getNomUrl(1, 'nolink');
+					print $risk->getNomUrl(1);
 				} elseif ($key == 'description') {
 					if ($conf->global->DIGIRISKDOLIBARR_RISK_DESCRIPTION == 0 ) {
 						print $langs->trans('RiskDescriptionNotActivated');

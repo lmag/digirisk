@@ -1,3 +1,8 @@
+<?php
+// $onPhone is set by the calling page (risk_list.php, digiriskelement_risk.php)
+// but this template must not assume it when included from another context
+$onPhone = $onPhone ?? ($conf->browser->layout == 'phone');
+?>
 <!-- RISK EVALUATION EDIT MODAL START-->
 <div class="risk-evaluation-edit-modal" value="<?php echo $lastEvaluation->id ?>">
 	<div class="wpeo-modal modal-risk" id="risk_evaluation_edit<?php echo $lastEvaluation->id ?>" value="<?php echo $risk->id ?>">
@@ -27,7 +32,7 @@
 					</div>
 				</div>
 				<div class="risk-evaluation-container <?php echo $lastEvaluation->method; ?>">
-					<div class="risk-evaluation-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+					<div class="risk-evaluation-header risk-evaluation-header-split">
                         <div class="risk-evaluation-header-left">
                             <?php if ($conf->global->DIGIRISKDOLIBARR_ADVANCED_RISKASSESSMENT_METHOD) : ?>
                                 <?php if ( $conf->global->DIGIRISKDOLIBARR_MULTIPLE_RISKASSESSMENT_METHOD == 1 ) : ?>

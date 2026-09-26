@@ -6,7 +6,7 @@
  *
  * Variables expected from calling TPL:
  * - $t                      array  Enriched task data (one entry of $tasksJson)
- * - $kanbanThresholds       array  Column threshold config
+ * - $kanbanColumns           array  Columns from digiriskActionPlanGetKanbanColumns()
  * - $allUsers               array  Internal users (responsible / contributor selectors)
  * - $allContacts            array  External contacts (contributor selector)
  * - $allAvailableCategories array  Categories (tag selector)
@@ -18,6 +18,13 @@
     <!-- Header: Ref + Date + Workload + Budget + Risk -->
     <div class="kanban-card-header">
         <a href="<?= $t['url'] ?>" class="kanban-card-ref" target="_blank"><?= dol_escape_htmltag($t['ref']) ?></a>
+
+        <?php // A late action of a past year, shown here because the carry over option is on ?>
+        <?php if (!empty($t['carried_over_from'])) : ?>
+            <span class="kanban-card-carried" title="<?= dol_escape_htmltag($langs->trans('ActionPlanCarriedOverHelp')) ?>">
+                <i class="fas fa-history"></i> <?= $langs->trans('ActionPlanCarriedOverFrom', $t['carried_over_from']) ?>
+            </span>
+        <?php endif; ?>
 
         <span class="kanban-meta-item kanban-editable-meta" data-field="planned_workload" data-task-id="<?= $t['id'] ?>"
               data-raw="<?= $t['planned_workload'] > 0 ? round($t['planned_workload'] / 3600, 2) : 0 ?>"
@@ -37,7 +44,19 @@
             $riskUrl = !empty($rd['fk_element']) ? DOL_URL_ROOT . '/custom/digiriskdolibarr/view/digiriskelement/digiriskelement_risk.php?id=' . $rd['fk_element'] : '';
         ?>
             <a href="<?= $riskUrl ?>" class="kanban-card-risk kanban-risk-tooltip-trigger" style="background:<?= $cotColor ?>;color:<?= $textColor ?>" target="_blank">
-                <i class="fas fa-exclamation-triangle"></i> <?= dol_escape_htmltag($t['risk_ref']) ?>
+                <?php // The danger category thumbnail names the kind of risk, where the warning sign was the same for all — issue #5235 ?>
+                <?php if (!empty($rd['category_picto'])) : ?>
+                    <img class="kanban-risk-picto" src="<?= DOL_URL_ROOT ?>/custom/digiriskdolibarr/img/categorieDangers/<?= dol_escape_htmltag($rd['category_picto']) ?>.png" alt="" title="<?= dol_escape_htmltag($rd['category_name']) ?>">
+                <?php else : ?>
+                    <i class="fas fa-exclamation-triangle"></i>
+                <?php endif; ?>
+                <?= dol_escape_htmltag($t['risk_ref']) ?>
+                <?php // Cotation of the last assessment, until now only readable by hovering the card.
+                      // Keyed on that assessment rather than on the figure itself, so a risk that has
+                      // never been assessed shows nothing instead of a misleading 0 — issue #5235 ?>
+                <?php if (!empty($rd['ra_ref'])) : ?>
+                    <span class="kanban-risk-cotation"><?= (int) $rd['cotation'] ?></span>
+                <?php endif; ?>
                 <?php if (!empty($rd)) : ?>
                 <div class="kanban-risk-tooltip">
                     <div class="krt-header">
@@ -79,6 +98,19 @@
     <!-- Label -->
     <div class="kanban-card-label"><?= dol_escape_htmltag($t['label']) ?></div>
 
+    <!-- GP/UT carrying the linked risk -->
+    <?php if (!empty($t['element_ref'])) : ?>
+        <div class="kanban-card-element">
+            <a href="<?= DOL_URL_ROOT ?>/custom/digiriskdolibarr/view/digiriskelement/digiriskelement_risk.php?id=<?= (int) $t['element_id'] ?>"
+               class="kanban-element-badge kanban-element-<?= dol_escape_htmltag($t['element_type']) ?>" target="_blank"
+               title="<?= dol_escape_htmltag($t['element_ref'] . ' - ' . $t['element_label']) ?>">
+                <i class="fas fa-sitemap"></i>
+                <span class="kanban-element-ref"><?= dol_escape_htmltag($t['element_ref']) ?></span>
+                <span class="kanban-element-label"><?= dol_escape_htmltag($t['element_label']) ?></span>
+            </a>
+        </div>
+    <?php endif; ?>
+
     <!-- Contacts row: [Resp initial] | [Contrib initials] [count] [👤+] -->
     <div class="kanban-card-contacts">
         <!-- Responsible: clickable initial circle -->
@@ -91,22 +123,14 @@
             $respFullname = $t['responsible'][0]['fullname'];
             $respId       = $t['responsible'][0]['id'];
         }
-        // Color matching progress bar
-        $p = $t['progress'];
-        if ($p <= $kanbanThresholds['draft_max']) {
-            $respColor = '#999999';
-        } elseif ($p <= $kanbanThresholds['progress_max']) {
-            $respColor = '#e9ad4f';
-        } elseif ($p <= $kanbanThresholds['control_max']) {
-            $respColor = '#3085d6';
-        } else {
-            $respColor = '#47e58e';
-        }
+        // Colour of the column the progress falls in, shared with the progress bar below
+        $cardColumn = digiriskActionPlanGetColumnForProgress($kanbanColumns, (int) $t['progress']);
+        $cardColor  = !empty($cardColumn) ? $cardColumn['color'] : '#999999';
         ?>
         <div class="kanban-responsible-wrapper" data-task-id="<?= $t['id'] ?>" data-current-user="<?= $respId ?>">
             <span class="kanban-initial kanban-initial-responsible <?= empty($respInitial) ? 'kanban-initial-empty' : '' ?>"
                   title="<?= dol_escape_htmltag($respFullname ?: $langs->trans('Unassigned')) ?>"
-                  style="background: <?= $respColor ?>">
+                  style="background: <?= dol_escape_htmltag($cardColor) ?>">
                 <?= $respInitial ?: '?' ?>
             </span>
             <!-- Hidden searchable dropdown, shown on click (same UI as contributor selector) -->
@@ -208,19 +232,8 @@
     <!-- Progress bar -->
     <div class="kanban-card-progress">
         <div class="kanban-progress-bar">
-            <?php
-            if ($t['progress'] <= $kanbanThresholds['draft_max']) {
-                $barClass = 'progress-grey';
-            } elseif ($t['progress'] <= $kanbanThresholds['progress_max']) {
-                $barClass = 'progress-yellow';
-            } elseif ($t['progress'] <= $kanbanThresholds['control_max']) {
-                $barClass = 'progress-blue';
-            } else {
-                $barClass = 'progress-green';
-            }
-            ?>
-            <div class="kanban-progress-fill <?= $barClass ?>"
-                 style="width: <?= $t['progress'] ?>%"></div>
+            <div class="kanban-progress-fill"
+                 style="width: <?= $t['progress'] ?>%; background: <?= dol_escape_htmltag($cardColor) ?>"></div>
         </div>
         <span class="kanban-progress-text"><?= $t['progress'] ?>%</span>
     </div>

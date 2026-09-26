@@ -937,3 +937,20 @@ INSERT INTO llx_c_digiriskdolibarr_certification (rowid, entity, ref, label, des
 INSERT INTO llx_c_digiriskdolibarr_certification (rowid, entity, ref, label, description, active, position) VALUES (17, 0, 'ATEX',              'ATEX',                                  '', 1, 170);
 INSERT INTO llx_c_digiriskdolibarr_certification (rowid, entity, ref, label, description, active, position) VALUES (18, 0, 'AMIANTE',           'Amiante (SS3/SS4)',                     '', 1, 180);
 INSERT INTO llx_c_digiriskdolibarr_certification (rowid, entity, ref, label, description, active, position) VALUES (19, 0, 'PONTIER',           'Pontier élingueur',                     '', 1, 190);
+
+-- Default Kanban columns of the action plan (PAPRIPACT), mirroring the historical percentage thresholds
+INSERT INTO llx_c_digiriskdolibarr_actionplan_column (rowid, entity, ref, label, description, progress_min, progress_max, color, picto, active, position) VALUES (1, 0, 'DRAFT',    'ColumnDraft',      '', 0,  0,   '#999999', 'fa-pencil-alt', 1, 10);
+INSERT INTO llx_c_digiriskdolibarr_actionplan_column (rowid, entity, ref, label, description, progress_min, progress_max, color, picto, active, position) VALUES (2, 0, 'PROGRESS', 'ColumnInProgress', '', 1,  80,  '#e9ad4f', 'fa-play',       1, 20);
+INSERT INTO llx_c_digiriskdolibarr_actionplan_column (rowid, entity, ref, label, description, progress_min, progress_max, color, picto, active, position) VALUES (3, 0, 'CONTROL',  'ColumnInControl',  '', 81, 99,  '#3085d6', 'fa-search',     1, 30);
+INSERT INTO llx_c_digiriskdolibarr_actionplan_column (rowid, entity, ref, label, description, progress_min, progress_max, color, picto, active, position) VALUES (4, 0, 'DONE',     'ColumnDone',       '', 100, 100, '#47e58e', 'fa-check',     1, 40);
+
+-- Default locations offered by the register form when the "list" input mode is on (issue #4732).
+-- The declared ticket keeps the label as text, so renaming a row here never rewrites past declarations.
+INSERT INTO llx_c_digiriskdolibarr_ticket_location (rowid, entity, ref, label, description, active, position) VALUES (1, 0, 'WORKSHOP',    'Atelier',                 '', 1, 10);
+INSERT INTO llx_c_digiriskdolibarr_ticket_location (rowid, entity, ref, label, description, active, position) VALUES (2, 0, 'OFFICE',      'Bureau',                  '', 1, 20);
+INSERT INTO llx_c_digiriskdolibarr_ticket_location (rowid, entity, ref, label, description, active, position) VALUES (3, 0, 'WAREHOUSE',   'Entrepôt / stockage',     '', 1, 30);
+INSERT INTO llx_c_digiriskdolibarr_ticket_location (rowid, entity, ref, label, description, active, position) VALUES (4, 0, 'LOADING_BAY', 'Quai de chargement',      '', 1, 40);
+INSERT INTO llx_c_digiriskdolibarr_ticket_location (rowid, entity, ref, label, description, active, position) VALUES (5, 0, 'CHANGING',    'Vestiaires / sanitaires', '', 1, 50);
+INSERT INTO llx_c_digiriskdolibarr_ticket_location (rowid, entity, ref, label, description, active, position) VALUES (6, 0, 'PARKING',     'Parking',                 '', 1, 60);
+INSERT INTO llx_c_digiriskdolibarr_ticket_location (rowid, entity, ref, label, description, active, position) VALUES (7, 0, 'VEHICLE',     'Véhicule',                '', 1, 70);
+INSERT INTO llx_c_digiriskdolibarr_ticket_location (rowid, entity, ref, label, description, active, position) VALUES (8, 0, 'OUTSIDE',     'Extérieur / voirie',      '', 1, 80);

@@ -73,7 +73,7 @@ global $langs;
                 $rowThumbnail = $blockProtection['thumbnail'];
                 $rowName      = $blockProtection['name'];
                 $rowComment   = $blockProtection['comment'];
-                include __DIR__ . '/preventionplan_mobile_protection_row.tpl.php';
+                include __DIR__ . '/digiriskdolibarr_mobile_protection_row.tpl.php';
             }
             ?>
         </div>

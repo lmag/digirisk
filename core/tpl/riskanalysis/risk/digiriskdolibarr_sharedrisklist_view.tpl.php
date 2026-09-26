@@ -67,19 +67,15 @@ $digiriskElementsOfEntity = $digiriskelement->getActiveDigiriskElements();
 $DUProject->fetch($riskType == 'risk' ? $conf->global->DIGIRISKDOLIBARR_DU_PROJECT : $conf->global->DIGIRISKDOLIBARR_ENVIRONMENT_PROJECT);
 $extrafields->fetch_name_optionals_label($digiriskTask->table_element);
 
-$riskAssessmentList        = $riskAssessment->fetchAll('', '', 0, 0, array(), 'AND', 1);
 $riskAssessmentNextValue   = $refEvaluationMod->getNextValue($evaluation);
 $riskAssessmentTaskList    = $risk->getTasksWithFkRisk();
 $taskNextValue             = $refTaskMod->getNextValue('', $task);
-$usertmp->fetchAll();
-$usersList                 = $usertmp->users;
 $timeSpentSortedByTasks    = $digiriskTask->fetchAllTimeSpentAllUsers('AND fk_element > 0', 'element_datehour', 'DESC', 1);
 
-if (is_array($riskAssessmentList) && !empty($riskAssessmentList)) {
-	foreach ($riskAssessmentList as $riskAssessmentSingle) {
-		$riskAssessmentsOrderedByRisk[$riskAssessmentSingle->fk_risk][$riskAssessmentSingle->id] = $riskAssessmentSingle;
-	}
-}
+// The list is paginated and both collections are only read by id, so they load their entries
+// on demand instead of instantiating every user and every risk assessment of the database
+$usersList                    = digirisk_get_user_list();
+$riskAssessmentsOrderedByRisk = digirisk_get_risk_assessments_by_risk();
 
 // Build and execute select
 // --------------------------------------------------------------------
@@ -101,6 +97,8 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
 	$sql                                                                                                                                          .= " LEFT JOIN " . MAIN_DB_PREFIX . $digiriskelement->table_element . " as e on (r.fk_element = e.rowid)";
 	$sql                                                                                                                                          .= " INNER JOIN " . MAIN_DB_PREFIX . 'element_element' . " as el on (r.rowid = el.fk_source)";
 	if (is_array($extrafields->attributes[$risk->table_element]['label']) && count($extrafields->attributes[$risk->table_element]['label'])) $sql .= " LEFT JOIN " . MAIN_DB_PREFIX . $risk->table_element . "_extrafields as ef on (r.rowid = ef.fk_object)";
+	// Every filter below is appended with AND: without this WHERE they would be attached to the extrafields LEFT JOIN ON clause and stop filtering anything
+	$sql .= " WHERE 1 = 1";
 
 	if ( ! $allRisks) {
 		$sql .= " AND el.fk_target = " . $id;
@@ -149,7 +147,7 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
 			}
 		}
 	}
-	if ($search_all) $sql .= natural_search(array_keys($fieldstosearchall), $search_all);
+	if ($search_all) $sql .= $risk->getSearchAllSqlFilter($fieldstosearchall, $search_all);
 	// Add where from extra fields
 	include DOL_DOCUMENT_ROOT . '/core/tpl/extrafields_list_search_sql.tpl.php';
 	// Add where from hooks
@@ -187,8 +185,9 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
 		$num = $db->num_rows($resql);
 	}
 
-	// Direct jump if only one record found
-	if ($num == 1 && ! empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && ! $page) {
+	// Direct jump if only one record found, out of reach once the page header has been printed : the redirect
+	// would only raise a "headers already sent" warning and leave the list truncated
+	if ($num == 1 && !headers_sent() && ! empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && ! $page) {
 		$obj = $db->fetch_object($resql);
 		$id  = $obj->rowid;
 		header("Location: " . dol_buildpath('/digiriskdolibarr/view/digiriskelement/digiriskelement_risk.php', 1) . '?id=' . $id);
@@ -214,8 +213,9 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
 	$sql 																																					  .= " LEFT JOIN " . MAIN_DB_PREFIX . $digiriskelement->table_element . " as e on (r.fk_element = e.rowid)";
 	if (isset($extrafields->attributes[$evaluation->table_element]) &&
         is_array($extrafields->attributes[$evaluation->table_element]['label']) && count($extrafields->attributes[$evaluation->table_element]['label'])) $sql .= " LEFT JOIN " . MAIN_DB_PREFIX . $evaluation->table_element . "_extrafields as ef on (evaluation.rowid = ef.fk_object)";
-	//if ($evaluation->ismultientitymanaged == 1) $sql                                                                                                          .= " WHERE evaluation.entity IN (" . getEntity($evaluation->element) . ")";
-	else $sql                                                                                                                                                 .= " WHERE 1 = 1";
+	// The entity filter cannot apply here: risk assessments of shared risks belong to the entity that owns them
+	// Every filter below is appended with AND: without this WHERE they would be attached to the extrafields LEFT JOIN ON clause and stop filtering anything
+	$sql .= " WHERE 1 = 1";
 	$sql                                                                                                                                                      .= " AND evaluation.status = 1";
 
 	if ( ! $allRisks) {
@@ -265,7 +265,7 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
 			}
 		}
 	}
-	if ($search_all) $sql .= natural_search(array_keys($fieldstosearchall), $search_all);
+	if ($search_all) $sql .= $risk->getSearchAllSqlFilter($fieldstosearchall, $search_all);
 	// Add where from extra fields
 	include DOL_DOCUMENT_ROOT . '/core/tpl/extrafields_list_search_sql.tpl.php';
 	// Add where from hooks
@@ -303,8 +303,9 @@ if ( ! preg_match('/(evaluation)/', $sortfield)) {
 		$num = $db->num_rows($resql);
 	}
 
-	// Direct jump if only one record found
-	if ($num == 1 && ! empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && ! $page) {
+	// Direct jump if only one record found, out of reach once the page header has been printed : the redirect
+	// would only raise a "headers already sent" warning and leave the list truncated
+	if ($num == 1 && !headers_sent() && ! empty($conf->global->MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE) && $search_all && ! $page) {
 		$obj = $db->fetch_object($resql);
 		$id  = $obj->rowid;
 		header("Location: " . dol_buildpath('/digiriskdolibarr/view/digiriskelement/digiriskelement_risk.php', 1) . '?id=' . $id);
@@ -329,7 +330,7 @@ include DOL_DOCUMENT_ROOT . '/core/tpl/extrafields_list_search_param.tpl.php';
 $arrayofmassactions = [];
 $massactionbutton   = $form->selectMassAction('', $arrayofmassactions);
 
-$title = $langs->trans('DigiriskElementShared' . ucfirst($riskType) . 'sList');
+$title = digirisk_trans_risk_type('DigiriskElementShared', $riskType, 'sList');
 print_barre_liste($title, $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, $massactionbutton, $num, $nbtotalofrecords, 'digiriskdolibarr_color.png@digiriskdolibarr', 0, '', '', $limit, 0, 0, 1);
 
 include DOL_DOCUMENT_ROOT . '/core/tpl/massactions_pre.tpl.php';
@@ -409,7 +410,7 @@ foreach ($risk->fields as $key => $val) {
 						<img class="danger-category-pic wpeo-tooltip-event hidden" src="" aria-label=""/>
 					</div>
 				<?php else : ?>
-					<div class="dropdown-toggle dropdown-add-button button-cotation wpeo-tooltip-event" aria-label="<?php echo (empty(dol_escape_htmltag($search[$key]))) ? $risk->getDangerCategoryName($risk, $riskType) : $risk->getDangerCategoryNameByPosition($search[$key], $riskType); ?>">
+					<div class="dropdown-toggle dropdown-add-button button-cotation wpeo-tooltip-event" aria-label="<?php echo (empty(dol_escape_htmltag($search[$key]))) ? $risk->getDangerCategoryTooltip($risk, $riskType) : $risk->getDangerCategoryTooltipByPosition($search[$key], $riskType); ?>">
 						<img class="danger-category-pic tooltip hover" src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . ((empty(dol_escape_htmltag($search[$key]))) ? $risk->getDangerCategory($risk, $riskType) : $risk->getDangerCategoryByPosition($search[$key], $riskType)) . '.png'?>" />
 					</div>
 				<?php endif; ?>
@@ -418,7 +419,7 @@ foreach ($risk->fields as $key => $val) {
 					$dangerCategories = Risk::getDangerCategories($riskType);
 					if ( ! empty($dangerCategories) ) :
 						foreach ($dangerCategories as $dangerCategory) : ?>
-							<li class="item dropdown-item wpeo-tooltip-event classfortooltip" data-is-preset="<?php echo ''; ?>" data-id="<?php echo $dangerCategory['position'] ?>" aria-label="<?php echo $dangerCategory['name'] ?>">
+							<li class="item dropdown-item wpeo-tooltip-event classfortooltip" data-is-preset="<?php echo ''; ?>" data-id="<?php echo $dangerCategory['position'] ?>" data-name="<?php echo dol_escape_htmltag($dangerCategory['name']) ?>" aria-label="<?php echo $risk->formatDangerCategoryTooltip($dangerCategory) ?>">
 								<img src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $dangerCategory['thumbnail_name'] . '.png'?>" class="attachment-thumbail size-thumbnail photo photowithmargin" alt="" loading="lazy" width="48" height="48">
 							</li>
 						<?php endforeach;
@@ -525,7 +526,8 @@ while ($i < ($limit ? min($num, $limit) : $num)) {
 				<?php
 				print getNomUrlEntity($risk, 1, 'nolink', 1);
 			} elseif ($key == 'fk_element') {
-                if (is_object($alldigiriskelement[$risk->fk_element])) {
+                // L'élément parent est absent de la liste s'il a été mis à la corbeille
+                if (is_object($alldigiriskelement[$risk->fk_element] ?? null)) {
                     // Display either parent element or every parent elements of the risk according to conf
                     if (!getDolGlobalInt('DIGIRISKDOLIBARR_RISK_LIST_PARENT_VIEW')) {
                         print $alldigiriskelement[$risk->fk_element]->getNomUrl(1, 'blank', 0, '', -1, 1);
@@ -543,7 +545,7 @@ while ($i < ($limit ? min($num, $limit) : $num)) {
                 }
             } elseif ($key == 'category') { ?>
 				<div class="table-cell table-50 cell-risk" data-title="Risque">
-					<div class="wpeo-dropdown dropdown-large category-danger padding wpeo-tooltip-event" aria-label="<?php echo $risk->getDangerCategoryName($risk, $riskType) ?>">
+					<div class="wpeo-dropdown dropdown-large category-danger padding wpeo-tooltip-event" aria-label="<?php echo $risk->getDangerCategoryTooltip($risk, $riskType) ?>">
 						<img class="danger-category-pic hover" src="<?php echo DOL_URL_ROOT . '/custom/digiriskdolibarr/img/categorieDangers/' . $risk->getDangerCategory($risk, $riskType) . '.png' ; ?>"/>
 					</div>
 				</div>

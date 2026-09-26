@@ -42,6 +42,7 @@ require_once __DIR__ . '/../../../saturne/class/task/saturnetask.class.php';
 // Load DigiriskDolibarr libraries
 require_once __DIR__ . '/../../class/digiriskstandard.class.php';
 require_once __DIR__ . '/../../class/riskanalysis/risk.class.php';
+require_once __DIR__ . '/../../lib/digiriskdolibarr_actionplan.lib.php';
 require_once __DIR__ . '/../../lib/digiriskdolibarr_digiriskstandard.lib.php';
 
 // Global variables definitions
@@ -63,6 +64,7 @@ $object      = new DigiriskStandard($db);
 $task        = new SaturneTask($db);
 $risk        = new Risk($db);
 $project     = new Project($db);
+$form        = new Form($db);
 $formproject = new FormProjets($db);
 
 $hookmanager->initHooks(['actionplanlist', 'globalcard']);
@@ -113,6 +115,15 @@ if ($projectId > 0 && ($isExplicitChoice || (int) ($_COOKIE[$projectCookieName] 
 // Security check
 $permissiontoread = $user->hasRight('digiriskdolibarr', 'riskassessmentdocument', 'read');
 saturne_check_access($permissiontoread);
+
+// Displayed corrective actions criteria (GP/UT, risk level, tags) — shared by the Kanban, the Gantt and the exports
+$actionPlanFilters = digiriskActionPlanGetFilters();
+
+// Displayed year: the tabs split the running calendar year from the previous ones. The year of
+// every corrective action of the project is resolved once, it also feeds the history selector.
+$actionPlanTaskYears  = digiriskActionPlanGetProjectTaskYears($db, $projectId);
+$actionPlanYearCounts = digiriskActionPlanGetYearCounts($actionPlanTaskYears);
+$actionPlanFilters    = digiriskActionPlanResolveYear($actionPlanFilters, $actionPlanYearCounts);
 
 // Load ActionComm for event logging
 require_once DOL_DOCUMENT_ROOT . '/comm/action/class/actioncomm.class.php';
@@ -530,7 +541,8 @@ if ($action == 'removeTaskCategory' && !empty(GETPOSTINT('task_id'))) {
 }
 
 // Action to generate and download the PAPRIPACT in A3 landscape format
-if ($action == 'builddoc' && GETPOST('model', 'alpha') == 'papripact_a3_paysage_projectdocument' && $user->hasRight('projet', 'creer')) {
+// The model is the one set as default on the documents configuration page, PAPRIPACT when none is
+if ($action == 'builddoc' && GETPOST('model', 'alpha') == getDolGlobalString('DIGIRISKDOLIBARR_PROJECTDOCUMENT_DEFAULT_MODEL', 'papripact_a3_paysage_projectdocument') && $user->hasRight('projet', 'creer')) {
     require_once DOL_DOCUMENT_ROOT . '/projet/class/project.class.php';
     require_once __DIR__ . '/../../class/digiriskdolibarrdocuments/projectdocument.class.php';
 
@@ -540,7 +552,7 @@ if ($action == 'builddoc' && GETPOST('model', 'alpha') == 'papripact_a3_paysage_
         $object          = $project;
         $document        = new ProjectDocument($db);
         $permissiontoadd = 1;
-        $moreParams      = ['modulePart' => 'project'];
+        $moreParams      = ['modulePart' => 'project', 'actionPlanFilters' => $actionPlanFilters];
         $shouldRedirect  = false;
 
         require __DIR__ . '/../../../saturne/core/tpl/documents/documents_action.tpl.php';
@@ -555,7 +567,7 @@ if ($action == 'builddoc' && GETPOST('model', 'alpha') == 'papripact_a3_paysage_
         setEventMessages($langs->trans('ErrorRecordNotFound'), [], 'errors');
     }
 
-    header('Location: ' . $_SERVER['PHP_SELF'] . '?view=kanban');
+    header('Location: ' . $_SERVER['PHP_SELF'] . '?view=kanban&period=' . urlencode($actionPlanFilters['period']) . '&year=' . (int) $actionPlanFilters['year']);
     exit;
 }
 
@@ -568,16 +580,32 @@ if ($action == 'exportCsv' && $permissiontoread) {
 
     $exportTaskIds = array_map(function ($t) { return (int) $t->id; }, $exportTasks);
 
-    // Linked risk ref per task
+    // The export follows the criteria applied on screen (GP/UT, risk level, tags)
+    $exportElementTree = digiriskActionPlanGetElementTree($db);
+    $exportKeptTaskIds = digiriskActionPlanFilterTasks($db, $exportTaskIds, $actionPlanFilters, $exportElementTree);
+    if (count($exportKeptTaskIds) != count($exportTaskIds)) {
+        $exportKeptTaskMap = array_flip($exportKeptTaskIds);
+        $exportTasks       = array_values(array_filter($exportTasks, function ($t) use ($exportKeptTaskMap) {
+            return isset($exportKeptTaskMap[(int) $t->id]);
+        }));
+        $exportTaskIds     = $exportKeptTaskIds;
+    }
+
+    // Linked risk ref and GP/UT carrying it, per task
     $exportRiskRef = [];
+    $exportElement = [];
     if (!empty($exportTaskIds)) {
-        $sql  = "SELECT te.fk_object, r.ref FROM " . MAIN_DB_PREFIX . "projet_task_extrafields as te";
+        $sql  = "SELECT te.fk_object, r.ref, r.fk_element FROM " . MAIN_DB_PREFIX . "projet_task_extrafields as te";
         $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "digiriskdolibarr_risk as r ON r.rowid = te.fk_risk";
         $sql .= " WHERE te.fk_risk > 0 AND te.fk_object IN (" . implode(',', $exportTaskIds) . ")";
         $resql = $db->query($sql);
         if ($resql) {
             while ($obj = $db->fetch_object($resql)) {
                 $exportRiskRef[(int) $obj->fk_object] = $obj->ref;
+                $exportElementInfo = $exportElementTree['flat'][(int) $obj->fk_element] ?? [];
+                if (!empty($exportElementInfo)) {
+                    $exportElement[(int) $obj->fk_object] = $exportElementInfo['ref'] . ' - ' . $exportElementInfo['label'];
+                }
             }
             $db->free($resql);
         }
@@ -601,7 +629,7 @@ if ($action == 'exportCsv' && $permissiontoread) {
     }
 
     $separator = getDolGlobalString('DIGIRISKDOLIBARR_KANBAN_CSV_SEPARATOR', ';');
-    $fileName  = 'papripact_' . dol_print_date(dol_now(), 'dayxcard') . '.csv';
+    $fileName  = 'papripact_' . (int) $actionPlanFilters['year'] . '_' . dol_print_date(dol_now(), 'dayxcard') . '.csv';
 
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="' . $fileName . '"');
@@ -619,6 +647,7 @@ if ($action == 'exportCsv' && $permissiontoread) {
         $langs->transnoentities('Budget'),
         $langs->transnoentities('Progress'),
         $langs->transnoentities('LinkedRisk'),
+        $langs->transnoentities('ActionPlanElement'),
         $langs->transnoentities('Responsible'),
     ], $separator);
 
@@ -633,6 +662,7 @@ if ($action == 'exportCsv' && $permissiontoread) {
             $budget > 0 ? $budget : '',
             (int) $t->progress . '%',
             $exportRiskRef[$t->id] ?? '',
+            $exportElement[$t->id] ?? '',
             isset($exportResponsible[$t->id]) ? implode(', ', $exportResponsible[$t->id]) : '',
         ], $separator);
     }
@@ -694,6 +724,9 @@ if ($resContacts) {
     $db->free($resContacts);
 }
 
+// GP/UT tree of the entity: feeds the filter selector and the GP/UT shown on each card
+$elementTree = digiriskActionPlanGetElementTree($db);
+
 // Fetch all tasks for the DU project
 $allTasks = [];
 if ($projectId > 0) {
@@ -701,6 +734,30 @@ if ($projectId > 0) {
     if (is_array($tasksList) && !empty($tasksList)) {
         $allTasks = $tasksList;
     }
+}
+
+// Keep the corrective actions of the displayed year, the years are already resolved so the
+// board never queries them again. It comes before the count: the filter bar compares its
+// criteria to the corrective actions of the year, not to the whole project.
+if (!empty($allTasks)) {
+    $allTasks = array_values(array_filter($allTasks, function ($t) use ($actionPlanTaskYears, $actionPlanFilters) {
+        $taskYear = $actionPlanTaskYears[(int) $t->id] ?? ['year' => 0, 'progress' => 0];
+        return digiriskActionPlanTaskMatchesYear($taskYear['year'], $taskYear['progress'], (int) $actionPlanFilters['year']);
+    }));
+}
+
+// Apply the GP/UT, risk level and tag criteria before the enrichment queries below
+$unfilteredTaskCount = count($allTasks);
+if (digiriskActionPlanHasFilters($actionPlanFilters) && !empty($allTasks)) {
+    // The year is already applied, dropping it spares the task dates query
+    $criteriaFilters         = $actionPlanFilters;
+    $criteriaFilters['year'] = 0;
+
+    $keptTaskIds = digiriskActionPlanFilterTasks($db, array_map(function ($t) { return (int) $t->id; }, $allTasks), $criteriaFilters, $elementTree);
+    $keptTaskMap = array_flip($keptTaskIds);
+    $allTasks    = array_values(array_filter($allTasks, function ($t) use ($keptTaskMap) {
+        return isset($keptTaskMap[(int) $t->id]);
+    }));
 }
 
 // Fetch risk links (fk_risk => tasks) — scoped to current project tasks only
@@ -783,6 +840,13 @@ if (!empty($taskRiskMap)) {
             $dangerCatName = '';
         }
 
+        // Thumbnail of the danger category, so a card says which kind of risk it is at a
+        // glance instead of the single warning sign every risk shares - issue #5235
+        $dangerCatPicto = $riskObj->getDangerCategory($riskObj, $riskObj->type ?: 'risk');
+        if ($dangerCatPicto == -1) {
+            $dangerCatPicto = '';
+        }
+
         $raPhotoUrl = '';
         if ($lastRA) {
             $raDir = $conf->digiriskdolibarr->multidir_output[$conf->entity] . '/riskassessment/' . $lastRA->ref;
@@ -806,11 +870,19 @@ if (!empty($taskRiskMap)) {
             }
         }
 
+        // GP/UT carrying the risk — a risk always sits on a digirisk element, but that element
+        // may have been trashed since, in which case the tree does not expose it any more
+        $elementInfo = $elementTree['flat'][(int) $riskObj->fk_element] ?? [];
+
         $riskData[$riskId] = [
             'ref'            => $riskObj->ref,
             'fk_element'     => $riskObj->fk_element,
+            'element_ref'    => $elementInfo['ref'] ?? '',
+            'element_label'  => $elementInfo['label'] ?? '',
+            'element_type'   => $elementInfo['type'] ?? '',
             'description'    => $riskObj->description,
             'category_name'  => $dangerCatName,
+            'category_picto' => $dangerCatPicto,
             'cotation'       => $cotation,
             'cotation_color' => $cotColor,
             'ra_ref'         => $lastRA ? $lastRA->ref : '',
@@ -858,12 +930,8 @@ if ($resCats) {
     $db->free($resCats);
 }
 
-// Kanban column thresholds (configurable)
-$kanbanThresholds = [
-    'draft_max'   => getDolGlobalInt('DIGIRISKDOLIBARR_KANBAN_DRAFT_MAX', 0),
-    'progress_max' => getDolGlobalInt('DIGIRISKDOLIBARR_KANBAN_PROGRESS_MAX', 80),
-    'control_max'  => getDolGlobalInt('DIGIRISKDOLIBARR_KANBAN_CONTROL_MAX', 99),
-];
+// Kanban columns: percentage thresholds of the configuration, or the column dictionary
+$kanbanColumns = digiriskActionPlanGetKanbanColumns($db);
 
 // Batch file counts for all tasks (single query instead of N+1)
 $taskFileCounts = [];
@@ -982,6 +1050,10 @@ foreach ($allTasks as $t) {
     // Budget
     $budget = property_exists($t, 'budget_amount') ? (float) $t->budget_amount : 0;
 
+    // Year the action is due in, and the one it was carried over from when it is a late one
+    $taskYear        = $actionPlanTaskYears[(int) $t->id] ?? ['year' => 0, 'progress' => 0];
+    $carriedOverFrom = digiriskActionPlanIsCarriedOver($taskYear['year'], $taskYear['progress'], (int) $actionPlanFilters['year']) ? $taskYear['year'] : 0;
+
     $tasksJson[] = [
         'id'                 => $t->id,
         'ref'                => $t->ref,
@@ -995,10 +1067,15 @@ foreach ($allTasks as $t) {
         'duration_effective' => $t->duration_effective,
         'progress'           => (int) $t->progress,
         'status'             => (int) $t->fk_statut,
+        'carried_over_from'  => $carriedOverFrom,
         'risk_ref'           => $riskRef,
         'risk_id'            => $riskId,
         'risk_nomurl'        => $riskNomUrl,
         'risk_data'          => isset($riskData[$riskId]) ? $riskData[$riskId] : [],
+        'element_id'         => (int) ($riskData[$riskId]['fk_element'] ?? 0),
+        'element_ref'        => $riskData[$riskId]['element_ref'] ?? '',
+        'element_label'      => $riskData[$riskId]['element_label'] ?? '',
+        'element_type'       => $riskData[$riskId]['element_type'] ?? '',
         'categories'         => $cats,
         'responsible'        => $responsible,
         'contributors'       => $contributors,
@@ -1020,19 +1097,54 @@ if ($globalTaskCount > 0) {
     $globalProgress = (int) round($progressSum / $globalTaskCount);
 }
 
-// Tab header
-$head = [];
-$head[0][0] = $_SERVER['PHP_SELF'] . '?view=kanban';
-$head[0][1] = '<i class="fas fa-columns pictofixedwidth"></i>' . $langs->trans('ActionPlanKanban');
-$head[0][2] = 'kanban';
+// Tab header: the action plan of the running calendar year, then the closed ones. The history
+// tab opens on the year already displayed, or on the most recent past one.
+$currentYear = (int) dol_print_date(dol_now(), '%Y');
+$historyYear = ($actionPlanFilters['period'] == 'history') ? (int) $actionPlanFilters['year'] : 0;
+if ($historyYear <= 0) {
+    foreach (array_keys($actionPlanYearCounts) as $yearWithTasks) {
+        if ($yearWithTasks < $currentYear) {
+            $historyYear = $yearWithTasks;
+            break;
+        }
+    }
+}
 
-print dol_get_fiche_head($head, $view, $title, -1, 'task');
+// The tabs keep the view, the displayed project, the filter bar criteria and the menu highlight
+$tabUrl = $_SERVER['PHP_SELF'] . '?view=' . urlencode($view) . '&projectid=' . $projectId . digiriskActionPlanFilterUrlParams($actionPlanFilters);
+if (GETPOST('mainmenu', 'aZ09')) {
+    $tabUrl .= '&mainmenu=' . urlencode(GETPOST('mainmenu', 'aZ09'));
+}
+if (GETPOST('leftmenu', 'aZ09')) {
+    $tabUrl .= '&leftmenu=' . urlencode(GETPOST('leftmenu', 'aZ09'));
+}
+if (GETPOSTINT('idmenu') > 0) {
+    $tabUrl .= '&idmenu=' . GETPOSTINT('idmenu');
+}
+
+$head = [];
+$head[0][0] = $tabUrl . '&period=current';
+$head[0][1] = '<i class="fas fa-calendar-day pictofixedwidth"></i>' . $langs->trans('ActionPlanTabCurrentYear', $currentYear);
+$head[0][2] = 'current';
+$head[1][0] = $tabUrl . '&period=history' . ($historyYear > 0 ? '&year=' . $historyYear : '');
+$head[1][1] = '<i class="fas fa-history pictofixedwidth"></i>' . $langs->trans('ActionPlanTabHistory');
+$head[1][2] = 'history';
+
+print dol_get_fiche_head($head, $actionPlanFilters['period'], $title, -1, 'task');
 
 // Top-right export toolbar (CSV / PAPRIPACT A3 PDF / Gantt PNG), shared by both views
 require __DIR__ . '/../../core/tpl/actionplan/actionplan_export_buttons.tpl.php';
 
 // Displayed project banner + project switcher, shared by both views
 require __DIR__ . '/../../core/tpl/actionplan/actionplan_project_selector.tpl.php';
+
+// Year of the displayed action plan, the current year tab has only one
+if ($actionPlanFilters['period'] == 'history') {
+    require __DIR__ . '/../../core/tpl/actionplan/actionplan_year_selector.tpl.php';
+}
+
+// GP/UT, risk level and tag criteria, shared by both views
+require __DIR__ . '/../../core/tpl/actionplan/actionplan_filters.tpl.php';
 
 // Include appropriate TPL
 if ($view === 'kanban') {

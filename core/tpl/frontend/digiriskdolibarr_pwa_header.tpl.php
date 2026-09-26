@@ -31,22 +31,40 @@ if (empty($mysoc)) {
 }
 
 $logoFile = '';
-if (!empty($mysoc->logo_squarred)) {
+if (!empty($mysoc->logo_squarred_mini)) {
+    $logoFile = 'logos/thumbs/' . $mysoc->logo_squarred_mini;
+} elseif (!empty($mysoc->logo_squarred_small)) {
+    $logoFile = 'logos/thumbs/' . $mysoc->logo_squarred_small;
+} elseif (!empty($mysoc->logo_squarred)) {
     $logoFile = 'logos/thumbs/' . $mysoc->logo_squarred;
 } elseif (!empty($mysoc->logo)) {
     $logoFile = 'logos/thumbs/' . $mysoc->logo;
 }
 ?>
 <div id="id-top" class="digirisk-pwa-header">
-    <div class="digirisk-pwa-header__brand">
+    <a href="<?php print DOL_URL_ROOT; ?>/custom/digiriskdolibarr/digiriskdolibarrindex.php" class="digirisk-pwa-header__brand" style="text-decoration: none;">
         <?php if (!empty($logoFile)) {
             $logoUrl = DOL_URL_ROOT . '/viewimage.php?cache=1&modulepart=mycompany&file=' . urlencode($logoFile);
             print '<img class="digirisk-pwa-header__logo" src="' . $logoUrl . '" alt="">';
         } ?>
-        <span class="digirisk-pwa-header__title"><?php print dol_escape_htmltag(!empty($pwaHeaderTitle) ? $pwaHeaderTitle : ''); ?></span>
-    </div>
-    <div class="digirisk-pwa-header__user">
-        <i class="fas fa-user-circle"></i>
+        <span class="digirisk-pwa-header__title">
+            <?php 
+            print dol_escape_htmltag($mysoc->name); 
+            if (!empty($pwaHeaderTitle) && $pwaHeaderTitle !== $langs->trans('PwaNavHome') && $pwaHeaderTitle !== 'Accueil') {
+                print ' - ' . dol_escape_htmltag($pwaHeaderTitle);
+            }
+            ?>
+        </span>
+    </a>
+    <a href="<?php print DOL_URL_ROOT; ?>/user/card.php?id=<?php print $user->id; ?>" class="digirisk-pwa-header__user" style="text-decoration: none;">
+        <?php
+        // Build the URL through Form::showphoto(): a user photo lives in <user id>/photos/, so a
+        // hand-made viewimage.php link missing that sub-directory always renders as a broken
+        // image. It also falls back to a generic icon when the file is absent from the disk.
+        require_once DOL_DOCUMENT_ROOT . '/core/class/html.form.class.php';
+        $pwaHeaderForm = new Form($db);
+        print $pwaHeaderForm->showphoto('userphoto', $user, 0, 0, 0, 'digirisk-pwa-header__avatar', 'small', 0);
+        ?>
         <span class="digirisk-pwa-header__username"><?php print dol_escape_htmltag($user->getFullName($langs)); ?></span>
-    </div>
+    </a>
 </div>

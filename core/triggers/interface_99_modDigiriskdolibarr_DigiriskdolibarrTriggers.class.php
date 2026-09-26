@@ -72,7 +72,7 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
 		$this->name        = preg_replace('/^Interface/i', '', get_class($this));
 		$this->family      = "demo";
 		$this->description = "Digiriskdolibarr triggers.";
-		$this->version     = '23.1.0';
+		$this->version     = '23.5.0';
 		$this->picto       = 'digiriskdolibarr@digiriskdolibarr';
 	}
 
@@ -114,17 +114,17 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
         $action = str_replace('@DIGIRISKDOLIBARR', '', $action);
 		$active = getDolGlobalInt('DIGIRISKDOLIBARR_MAIN_AGENDA_ACTIONAUTO_' . $action);
 
-        // Le document PDF d'un plan de prevention n'est pas un evenement d'agenda : sa regeneration
-        // est traitee avant le filtre ci-dessous, sinon elle dependrait du reglage des actions
-        // automatiques et la diffusion presenterait un document absent ou perime selon une option
-        // qui n'a rien a voir avec lui.
+        // Le document PDF d'un plan de prevention ou d'un permis de feu n'est pas un evenement
+        // d'agenda : sa regeneration est traitee avant le filtre ci-dessous, sinon elle dependrait
+        // du reglage des actions automatiques et la diffusion presenterait un document absent ou
+        // perime selon une option qui n'a rien a voir avec lui.
         if (isModEnabled('digiriskdolibarr')) {
             $this->refreshPreventionPlanDocumentOnTrigger($action, $object, $user, $langs);
         }
 
         // Allowed triggers are a list of trigger from other module that should activate this file
 		if (!isModEnabled('digiriskdolibarr') || !$active) {
-			$allowedTriggers = ['COMPANY_DELETE', 'CONTACT_DELETE', 'TICKET_CREATE', 'TICKET_PUBLIC_INTERFACE_CREATE', 'TICKET_SIGN', 'SATURNE_SIGNATURE_SIGN', 'SATURNE_SIGNATURE_SIGN_PUBLIC'];
+			$allowedTriggers = ['COMPANY_DELETE', 'CONTACT_DELETE', 'TICKET_CREATE', 'TICKET_PUBLIC_INTERFACE_CREATE', 'TICKET_SIGN', 'SATURNE_SIGNATURE_SIGN', 'SATURNE_SIGNATURE_SIGN_PUBLIC', 'PRODUCT_CREATE'];
             if (!in_array($action, $allowedTriggers)) {
                 return 0;  // If module is not enabled or trigger is deactivated, we do nothing
             }
@@ -164,6 +164,39 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
 		}
 
         switch ($action) {
+            case 'PRODUCT_CREATE' :
+                $fieldsToDefault = [
+                    'digirisk_identification' => 'DIGIRISKDOLIBARR_PRODUCT_DEFAULT_IDENTIFICATION',
+                    'digirisk_security'       => 'DIGIRISKDOLIBARR_PRODUCT_DEFAULT_SECURITY',
+                    'digirisk_usermanual'     => 'DIGIRISKDOLIBARR_PRODUCT_DEFAULT_USERMANUAL',
+                    'digirisk_qualification'  => 'DIGIRISKDOLIBARR_PRODUCT_DEFAULT_QUALIFICATION',
+                    'digirisk_hygiene'        => 'DIGIRISKDOLIBARR_PRODUCT_DEFAULT_HYGIENE',
+                    'digirisk_maintenance'    => 'DIGIRISKDOLIBARR_PRODUCT_DEFAULT_MAINTENANCE'
+                ];
+                $hasUpdates = false;
+                if (!isset($object->array_options)) {
+                    $object->array_options = [];
+                }
+                $updates = [];
+                foreach ($fieldsToDefault as $field => $const) {
+                    $val = trim($object->array_options['options_' . $field] ?? '');
+                    if ($val === '') {
+                        $def = trim(getDolGlobalString($const));
+                        if ($def !== '') {
+                            $object->array_options['options_' . $field] = $def;
+                            $updates[] = $field . " = '" . $this->db->escape($def) . "'";
+                            $hasUpdates = true;
+                        }
+                    }
+                }
+                if ($hasUpdates) {
+                    $sql = "UPDATE " . MAIN_DB_PREFIX . "product_extrafields SET ";
+                    $sql .= implode(', ', $updates);
+                    $sql .= " WHERE fk_object = " . ((int) $object->id);
+                    $this->db->query($sql);
+                }
+                break;
+
 			case 'COMPANY_DELETE' :
 				require_once __DIR__ . '/../../class/preventionplan.class.php';
 				require_once __DIR__ . '/../../class/firepermit.class.php';
@@ -418,147 +451,9 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
 			case 'TICKET_CREATE' :
 				// Only send this notification for tickets submitted through the DigiRisk public interface.
 				// TICKET_CREATE is fired by Dolibarr core on every ticket creation (back-office, API, ...),
-				// but the email content below is built solely from public-interface extrafields.
+				// but the email below is built solely from public-interface extrafields.
 				if (getDolGlobalInt('DIGIRISKDOLIBARR_SEND_EMAIL_ON_TICKET_SUBMIT') && !empty($object->context['digiriskdolibarrpublicinterface'])) {
-					// envoi du mail avec les infos de l'objet aux adresses mail configurées
-					// envoi du mail avec une trad puis avec un model
-
-                    require_once DOL_DOCUMENT_ROOT . '/core/class/html.formmail.class.php';
-
-					$error = 0;
-					$formmail        = new FormMail($this->db);
-
-
-					$arraydefaultmessage = $formmail->getEMailTemplate($this->db, 'ticket_send', $user, $langs); // If $model_id is empty, preselect the first one
-
-					$substitutionarray = getCommonSubstitutionArray($langs, 0, null,$object);
-
-					$message = $langs->trans('Hello') . ',' . '<br><br>';
-					$message .= '<span style="color:#c55a11">' . $langs->trans('ANewTicketHasBeenSubmitted', $conf->global->MAIN_INFO_SOCIETE_NOM) . '.' . '</span><br><br>';
-					$message .= '<strong>' . $langs->trans('Service') . ' : ' . '</strong>';
-					$digiriskelement->fetch((int)$object->array_options['options_digiriskdolibarr_ticket_service']);
-					$message .= $digiriskelement->ref . ' - ' . $digiriskelement->label . '<br><br>';
-					$message .= '<strong>' . $langs->trans('Author') . ' : ' . '</strong>';
-					$message .= strtoupper($object->array_options['options_digiriskdolibarr_ticket_lastname']) . ' ' . $object->array_options['options_digiriskdolibarr_ticket_firstname'] . '<br><br>';
-					$message .= '<strong>' . $langs->trans('The') . ' : ' . '</strong>';
-					$message .= dol_print_date($object->array_options['options_digiriskdolibarr_ticket_date'], 'daytext') . '<br><br>';
-					$message .= '<strong>' . $langs->trans('TicketMessage') . ' : ' . '</strong>' . '<br>';
-					$message .= $object->message . '<br><br>';
-					$message .= $langs->trans('WithKindRegards') . ',' . '<br><br>';
-					$message .= '<strong style="color: #c0392b;">' . $langs->trans('SeeTicketUrl') . ' : ' . '</strong><a href="' . DOL_MAIN_URL_ROOT . '/ticket/card.php?id=' . $object->id . '">' . DOL_MAIN_URL_ROOT . '/ticket/card.php?id=' . $object->id . '</a><br><br>';
-					$message .= '<span style="color: #afabab; font-size: 12px;">' . $langs->trans('AutoNotificationTicket') . '<br><span style="color: #1f497d;">' . '- - DOLIBARR - -' . '</span><br>' . $langs->trans('TicketPublicInterfaceOtherName') . '</span><br><br>';
-
-					complete_substitutions_array($substitutionarray, $langs, $object);
-
-					$subject = make_substitutions($arraydefaultmessage->topic,$substitutionarray);
-					$message .= make_substitutions($arraydefaultmessage->content,$substitutionarray);
-
-					if ( ! $error) {
-						$langs->load('mails');
-
-						$listOfMails = $conf->global->DIGIRISKDOLIBARR_TICKET_SUBMITTED_SEND_MAIL_TO;
-
-						if ( ! preg_match('/;/', $listOfMails)) {
-							$sendto = $listOfMails;
-
-							if (dol_strlen($sendto) && ( ! empty($conf->global->MAIN_MAIL_EMAIL_FROM))) {
-								require_once DOL_DOCUMENT_ROOT . '/core/class/CMailFile.class.php';
-
-								$from = $conf->global->MAIN_MAIL_EMAIL_FROM;
-								$trackid = 'tic' . $object->id;
-
-								// Create form object
-								// Send mail (substitutionarray must be done just before this)
-								$mailfile = new CMailFile($subject, $sendto, $from, $message, array(), array(), array(), "", "", 0, -1, '', '', $trackid, '', 'ticket');
-
-								if ($mailfile->error) {
-									setEventMessages($mailfile->error, $mailfile->errors, 'errors');
-								} elseif ( ! empty($conf->global->MAIN_MAIL_SMTPS_ID)) {
-									$result = $mailfile->sendfile();
-									if ( ! $result) {
-										$langs->load("other");
-										$mesg = '<div class="error">';
-										if ($mailfile->error) {
-											$mesg .= $langs->transnoentities('ErrorFailedToSendMail', dol_escape_htmltag($from), dol_escape_htmltag($sendto));
-											$mesg .= '<br>' . $mailfile->error;
-										} else {
-											$mesg .= $langs->transnoentities('ErrorFailedToSendMail', dol_escape_htmltag($from), dol_escape_htmltag($sendto));
-										}
-										$mesg .= '</div>';
-										setEventMessages($mesg, null, 'warnings');
-									} else {
-										$actioncomm->elementtype  = 'ticket';
-										$actioncomm->label        = $langs->transnoentities('TicketCreationMailWellSent');
-										$actioncomm->note_private = $langs->transnoentities('TicketCreationMailSent', $sendto);
-
-										$result = $actioncomm->create($user);
-										break;
-									}
-								}
-							} else {
-								$langs->load("errors");
-								setEventMessages($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv("MailTo")), null, 'warnings');
-								dol_syslog('Try to send email with no recipient defined', LOG_WARNING);
-							}
-						} else {
-							$listOfMails = preg_split('/;/', $listOfMails);
-							if ( ! empty($listOfMails) && $listOfMails > 0) {
-								if (end($listOfMails) == ';') {
-									array_pop($listOfMails);
-								}
-								foreach ($listOfMails as $email) {
-									$sendto = $email;
-
-									if (dol_strlen($sendto) && ( ! empty($conf->global->MAIN_MAIL_EMAIL_FROM))) {
-										require_once DOL_DOCUMENT_ROOT . '/core/class/CMailFile.class.php';
-
-										$from = $conf->global->MAIN_MAIL_EMAIL_FROM;
-										$trackid = 'tic' . $object->id;
-
-										// Create form object
-										// Send mail (substitutionarray must be done just before this)
-										$mailfile = new CMailFile($subject, $sendto, $from, $message, array(), array(), array(), "", "", 0, -1, '', '', $trackid, '', 'ticket');
-
-										if ($mailfile->error) {
-											setEventMessages($mailfile->error, $mailfile->errors, 'errors');
-										} else {
-											if ( ! empty($conf->global->MAIN_MAIL_SMTPS_ID)) {
-												$result = $mailfile->sendfile();
-												if ( ! $result) {
-													$langs->load("other");
-													$mesg = '<div class="error">';
-													if ($mailfile->error) {
-														$mesg .= $langs->transnoentities('ErrorFailedToSendMail', dol_escape_htmltag($from), dol_escape_htmltag($sendto));
-														$mesg .= '<br>' . $mailfile->error;
-													} else {
-														$mesg .= $langs->transnoentities('ErrorFailedToSendMail', dol_escape_htmltag($from), dol_escape_htmltag($sendto));
-													}
-													$mesg .= '</div>';
-													setEventMessages($mesg, null, 'warnings');
-												} else {
-													$actioncomm->elementtype  = 'ticket';
-													$actioncomm->label        = $langs->transnoentities('TicketCreationMailWellSent');
-													$actioncomm->note_private = $langs->transnoentities('TicketCreationMailSent', $sendto);
-
-													$result = $actioncomm->create($user);
-													break;
-												}
-											}
-										}
-									} else {
-										$langs->load("errors");
-										setEventMessages($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv("MailTo")), null, 'warnings');
-										dol_syslog('Try to send email with no recipient defined', LOG_WARNING);
-									}
-								}
-							} else {
-								// Mail sent KO
-								$error++;
-								if ( ! empty($error)) setEventMessages(null, $langs->trans('WrongEmailFormat'), 'errors');
-								else setEventMessages($error, null, 'errors');
-							}
-						}
-					}
+					$this->sendTicketSubmittedMail($object, $user, $langs);
 				}
 				break;
 
@@ -577,10 +472,20 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
                     $category = new Categorie($this->db);
                     foreach ($categories as $categoryID) {
                         $category->fetch($categoryID);
-                        $categoryConfigs = json_decode($category->array_options['options_ticket_category_config']);
-                        if ($categoryConfigs->mail_template && $categoryConfigs->recipients) {
+                        $categoryConfigs = json_decode($category->array_options['options_ticket_category_config'] ?? '');
+
+                        // The empty entry of the mail template selector is stored as -1, a string that PHP
+                        // reads as true : a category carrying recipients but no template used to fetch the
+                        // template -1, leave SaturneMail::$topic uninitialized, and make the whole public
+                        // declaration fatal right after the ticket had been created
+                        $mailTemplateID = (int) ($categoryConfigs->mail_template ?? 0);
+                        if ($mailTemplateID > 0 && !empty($categoryConfigs->recipients)) {
                             $saturneMail = new SaturneMail($this->db);
-                            $saturneMail->fetch($categoryConfigs->mail_template);
+                            if ($saturneMail->fetch($mailTemplateID) <= 0) {
+                                dol_syslog('TICKET_PUBLIC_INTERFACE_CREATE : mail template ' . $mailTemplateID . ' of category ' . $categoryID . ' not found, no mail sent', LOG_WARNING);
+                                continue;
+                            }
+
                             $recipients = explode(',', $categoryConfigs->recipients);
                             foreach ($recipients as $recipientID) {
                                 $userTmp = new User($this->db);
@@ -946,10 +851,29 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
     }
 
     /**
-     * Regenere le document d'un plan de prevention quand l'evenement recu l'a rendu obsolete.
+     * Regenere le document PDF d'un permis de feu et le remet a disposition de la diffusion.
      *
-     * Le PDF suit le plan et rien d'autre : creation, modification, changement d'etat et signatures.
-     * Une signature porte le plan dans fk_object, les autres evenements sont le plan lui-meme.
+     * Remplace la version precedente au lieu de s'empiler avec elle : la page publique affiche
+     * tous les fichiers partages, deux PDF y seraient illisibles.
+     *
+     * @param  int       $permitId Identifiant du permis de feu
+     * @param  User      $user     Utilisateur a l'origine de l'action
+     * @param  Translate $langs    Objet de traduction
+     * @return void
+     */
+    protected function refreshFirePermitDocument(int $permitId, User $user, Translate $langs)
+    {
+        dol_include_once('/digiriskdolibarr/lib/digiriskdolibarr_firepermit.lib.php');
+
+        digiriskRefreshFirePermitDocument($this->db, $permitId, $user, $langs);
+    }
+
+    /**
+     * Regenere le document d'un plan de prevention ou d'un permis de feu quand l'evenement recu l'a
+     * rendu obsolete.
+     *
+     * Le PDF suit l'objet et rien d'autre : creation, modification, changement d'etat et signatures.
+     * Une signature porte l'objet dans fk_object, les autres evenements sont l'objet lui-meme.
      *
      * @param  string    $action Nom du trigger, prefixe module deja retire
      * @param  object    $object Objet a l'origine du trigger
@@ -970,11 +894,46 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
             return;
         }
 
+        // Le permis de feu se diffuse comme le plan de prevention : son document suit les memes etapes
+        $permitTriggers = [
+            'FIREPERMIT_CREATE', 'FIREPERMIT_MODIFY', 'FIREPERMIT_PENDINGSIGNATURE',
+            'FIREPERMIT_VALIDATE', 'FIREPERMIT_UNVALIDATE', 'FIREPERMIT_LOCK',
+        ];
+
+        if (in_array($action, $permitTriggers) && $object->id > 0) {
+            $this->refreshFirePermitDocument((int) $object->id, $user, $langs);
+
+            return;
+        }
+
         // Une signature change le document : sans regeneration, la diffusion continue de presenter
         // une version datee a des gens qui n'ont aucun moyen de s'en apercevoir.
         $signatureTriggers = ['SATURNE_SIGNATURE_SIGN', 'SATURNE_SIGNATURE_SIGN_PUBLIC', 'SATURNE_SIGNATURE_PENDING_SIGNATURE'];
-        if (in_array($action, $signatureTriggers) && isset($object->object_type) && $object->object_type == 'preventionplan' && $object->fk_object > 0) {
-            $this->refreshPreventionPlanDocument((int) $object->fk_object, $user, $langs);
+        if (in_array($action, $signatureTriggers) && isset($object->object_type) && in_array($object->object_type, ['preventionplan', 'firepermit']) && $object->fk_object > 0) {
+            dol_include_once('/saturne/class/saturnesignature.class.php');
+            $signatory = new SaturneSignature($this->db);
+            
+            // Check if all signatures are collected
+            if ($signatory->checkSignatoriesSignatures((int) $object->fk_object, $object->object_type) === 1) {
+                if ($object->object_type === 'preventionplan') {
+                    require_once __DIR__ . '/../../class/preventionplan.class.php';
+                    $docToLock = new PreventionPlan($this->db);
+                } else {
+                    require_once __DIR__ . '/../../class/firepermit.class.php';
+                    $docToLock = new FirePermit($this->db);
+                }
+                
+                if ($docToLock->fetch((int) $object->fk_object) > 0 && $docToLock->status == $docToLock::STATUS_VALIDATED) {
+                    // Auto-lock the document. This will fire PREVENTIONPLAN_LOCK or FIREPERMIT_LOCK.
+                    $docToLock->setLocked($user, false);
+                }
+            }
+
+            if ($object->object_type === 'preventionplan') {
+                $this->refreshPreventionPlanDocument((int) $object->fk_object, $user, $langs);
+            } else {
+                $this->refreshFirePermitDocument((int) $object->fk_object, $user, $langs);
+            }
         }
     }
 
@@ -1017,5 +976,230 @@ class InterfaceDigiriskdolibarrTriggers extends DolibarrTriggers
         dol_include_once('/digiriskdolibarr/lib/digiriskdolibarr_preventionplan.lib.php');
 
         return digiriskShareGeneratedFile($this->db, $fileName, $tableElement, $objectId, $user, $favorite);
+    }
+
+    /**
+     * Prevenir les adresses configurees qu'un registre vient d'etre declare - issue #5235
+     *
+     * Le corps du message etait ecrit en dur ici, et le modele d'email eventuel ne faisait que
+     * s'y ajouter. Il pilote desormais le message, comme le fait le socle pour les mails de
+     * ticket du coeur : la constante DIGIRISKDOLIBARR_TICKET_SUBMITTED_MAIL_MODEL porte le
+     * libelle du modele, et tant qu'elle est vide le contenu d'origine est servi, a la
+     * signature « - - DOLIBARR - - » pres, qui est justement ce que l'issue demande de retirer.
+     *
+     * @param  CommonObject $object Ticket declare
+     * @param  User         $user   Utilisateur a l'origine de l'action
+     * @param  Translate    $langs  Lang object
+     * @return void
+     */
+    protected function sendTicketSubmittedMail($object, User $user, Translate $langs)
+    {
+        global $conf;
+
+        require_once DOL_DOCUMENT_ROOT . '/core/class/CMailFile.class.php';
+        require_once DOL_DOCUMENT_ROOT . '/comm/action/class/actioncomm.class.php';
+
+        $langs->load('mails');
+
+        $recipients = $this->ticketSubmittedRecipients();
+        if (empty($recipients)) {
+            $langs->load('errors');
+            setEventMessages($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('MailTo')), null, 'warnings');
+            dol_syslog(__METHOD__ . ' : try to send email with no recipient defined', LOG_WARNING);
+            return;
+        }
+
+        $from = getDolGlobalString('MAIN_MAIL_EMAIL_FROM');
+        if (!dol_strlen($from)) {
+            $langs->load('errors');
+            setEventMessages($langs->trans('ErrorFieldRequired', $langs->transnoentitiesnoconv('MailFrom')), null, 'warnings');
+            dol_syslog(__METHOD__ . ' : MAIN_MAIL_EMAIL_FROM is empty, no mail sent', LOG_WARNING);
+            return;
+        }
+
+        // Garde historique : l'envoi n'a lieu que si un identifiant SMTP est configure. Trace,
+        // parce que sans cette ligne un envoi manquant ressemble a un bug du declenchement
+        if (empty($conf->global->MAIN_MAIL_SMTPS_ID)) {
+            dol_syslog(__METHOD__ . ' : MAIN_MAIL_SMTPS_ID is empty, no mail sent', LOG_WARNING);
+            return;
+        }
+
+        list($subject, $message) = $this->ticketSubmittedMailContent($object, $user, $langs);
+
+        $sent = [];
+        foreach ($recipients as $sendto) {
+            // Un CMailFile par destinataire, comme le faisait le code d'origine : une adresse
+            // invalide n'empeche pas les suivantes d'etre servies
+            $mailfile = new CMailFile($subject, $sendto, $from, $message, [], [], [], '', '', 0, -1, '', '', 'tic' . $object->id, '', 'ticket');
+            if ($mailfile->error) {
+                setEventMessages($mailfile->error, $mailfile->errors, 'errors');
+                continue;
+            }
+
+            if ($mailfile->sendfile()) {
+                $sent[] = $sendto;
+                continue;
+            }
+
+            $langs->load('other');
+            $mesg = '<div class="error">' . $langs->transnoentities('ErrorFailedToSendMail', dol_escape_htmltag($from), dol_escape_htmltag($sendto));
+            if ($mailfile->error) {
+                $mesg .= '<br>' . $mailfile->error;
+            }
+            setEventMessages($mesg . '</div>', null, 'warnings');
+        }
+
+        if (empty($sent)) {
+            return;
+        }
+
+        // Un evenement pour l'envoi, et non un par destinataire : c'est le meme message.
+        // L'ancien code sortait de sa boucle des le premier succes, donc les adresses
+        // suivantes de la liste n'etaient jamais servies
+        $actioncomm               = new ActionComm($this->db);
+        $actioncomm->type_code    = 'AC_OTH_AUTO';
+        $actioncomm->code         = 'AC_TICKET_CREATE';
+        $actioncomm->elementtype  = 'ticket';
+        $actioncomm->fk_element   = $object->id;
+        $actioncomm->datep        = dol_now();
+        $actioncomm->userownerid  = $user->id;
+        $actioncomm->percentage   = -1;
+        $actioncomm->label        = $langs->transnoentities('TicketCreationMailWellSent');
+        $actioncomm->note_private = $langs->transnoentities('TicketCreationMailSent', implode(', ', $sent));
+
+        $actioncomm->create($user);
+    }
+
+    /**
+     * Destinataires du mail de declaration, tels que saisis dans la configuration.
+     *
+     * @return array Adresses, sans doublon ni entree vide
+     */
+    protected function ticketSubmittedRecipients(): array
+    {
+        $recipients = preg_split('/[;,]/', (string) getDolGlobalString('DIGIRISKDOLIBARR_TICKET_SUBMITTED_SEND_MAIL_TO'));
+        if (!is_array($recipients)) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(array_map('trim', $recipients), function ($email) { return dol_strlen($email) > 0; })));
+    }
+
+    /**
+     * Sujet et corps du mail de declaration.
+     *
+     * @param  CommonObject $object Ticket declare
+     * @param  User      $user   Utilisateur a l'origine de l'action
+     * @param  Translate $langs  Lang object
+     * @return array             [sujet, corps]
+     */
+    protected function ticketSubmittedMailContent($object, User $user, Translate $langs): array
+    {
+        require_once DOL_DOCUMENT_ROOT . '/core/class/html.formmail.class.php';
+
+        // TICKET_CREATE peut partir d'ailleurs que de l'interface publique - API, back-office -
+        // et rien ne garantit alors que les domaines de langue du message soient charges. Un
+        // domaine absent laisserait la cle brute dans le mail, ce qui arrivait deja a
+        // WithKindRegards, porte par le socle.
+        // load() et non loadLangs() : en CI, PHPStan resout Translate sur le stub PHPUnit de
+        // saturne, qui ne connait ni l'une ni l'autre mais dont seule load() est deja gelee
+        // dans la baseline - dont le compteur de ce fichier suit ces deux appels
+        $langs->load('saturne@saturne');
+        $langs->load('digiriskdolibarr@digiriskdolibarr');
+
+        $substitutions  = $this->ticketSubmittedSubstitutions($object, $langs);
+        $defaultSubject = $langs->transnoentities('ANewTicketHasBeenSubmitted', getDolGlobalString('MAIN_INFO_SOCIETE_NOM'));
+        $mailModelLabel = getDolGlobalString('DIGIRISKDOLIBARR_TICKET_SUBMITTED_MAIL_MODEL');
+
+        if (dol_strlen($mailModelLabel)) {
+            $formmail = new FormMail($this->db);
+
+            // getEMailTemplate() rend l'entier -1 sur erreur SQL et un modele vide quand le
+            // libelle ne correspond a rien : dans les deux cas on retombe sur le contenu
+            // historique plutot que de partir avec un sujet nul
+            $template = $formmail->getEMailTemplate($this->db, 'ticket', $user, $langs, 0, 1, $mailModelLabel);
+            if (is_object($template) && $template->id > 0) {
+                $subject = make_substitutions($template->topic, $substitutions, $langs);
+
+                return [
+                    dol_strlen($subject) ? $subject : $defaultSubject,
+                    make_substitutions($template->content, $substitutions, $langs)
+                ];
+            }
+
+            dol_syslog(__METHOD__ . ' : mail model "' . $mailModelLabel . '" not found, falling back on the built-in content', LOG_WARNING);
+        }
+
+        return [$defaultSubject, $this->ticketSubmittedDefaultBody($object, $langs, $substitutions)];
+    }
+
+    /**
+     * Corps historique du mail de declaration, servi tant qu'aucun modele n'est choisi.
+     *
+     * @param  CommonObject $object     Ticket declare
+     * @param  Translate $langs         Lang object
+     * @param  array     $substitutions Substitutions deja resolues
+     * @return string                   Corps du message, en HTML
+     */
+    protected function ticketSubmittedDefaultBody($object, Translate $langs, array $substitutions): string
+    {
+        $ticketUrl = $substitutions['__TICKET_MANAGEMENT_URL__'];
+
+        $message  = $langs->trans('Hello') . ',<br><br>';
+        $message .= '<span style="color:#c55a11">' . $langs->trans('ANewTicketHasBeenSubmitted', getDolGlobalString('MAIN_INFO_SOCIETE_NOM')) . '.</span><br><br>';
+        $message .= '<strong>' . $langs->trans('Service') . ' : </strong>' . $substitutions['__TICKET_DIGIRISK_ELEMENT__'] . '<br><br>';
+        $message .= '<strong>' . $langs->trans('Author') . ' : </strong>' . $substitutions['__TICKET_DECLARANT__'] . '<br><br>';
+        $message .= '<strong>' . $langs->trans('The') . ' : </strong>' . $substitutions['__TICKET_DECLARATION_DATE__'] . '<br><br>';
+        $message .= '<strong>' . $langs->trans('TicketMessage') . ' : </strong><br>' . $object->message . '<br><br>';
+        $message .= $langs->trans('WithKindRegards') . ',<br><br>';
+        $message .= '<strong style="color: #c0392b;">' . $langs->trans('SeeTicketUrl') . ' : </strong><a href="' . $ticketUrl . '">' . $ticketUrl . '</a><br><br>';
+        $message .= '<span style="color: #afabab; font-size: 12px;">' . $langs->trans('AutoNotificationTicket') . '<br>' . $langs->trans('TicketPublicInterfaceOtherName') . '</span><br><br>';
+
+        return $message;
+    }
+
+    /**
+     * Substitutions offertes au modele d'email du mail de declaration.
+     *
+     * Les cles __TICKET_* reprennent celles du socle pour les mails de ticket, completees des
+     * champs propres au formulaire de declaration. Le GP/UT est un chkbxlst : une declaration
+     * peut en porter plusieurs, ils sont donc tous repris et non le premier seulement.
+     *
+     * @param  CommonObject $object Ticket declare
+     * @param  Translate $langs  Lang object
+     * @return array             Substitutions
+     */
+    protected function ticketSubmittedSubstitutions($object, Translate $langs): array
+    {
+        dol_include_once('/digiriskdolibarr/lib/digiriskdolibarr_ticket.lib.php');
+        dol_include_once('/digiriskdolibarr/class/digiriskelement.class.php');
+
+        $elementLabels = [];
+        foreach (digiriskdolibarr_ticket_service_ids($object) as $elementId) {
+            // Un objet neuf par element : un fetch en echec laisse les donnees du precedent
+            $digiriskElement = new DigiriskElement($this->db);
+            if ($digiriskElement->fetch($elementId) > 0) {
+                $elementLabels[] = $digiriskElement->ref . ' - ' . $digiriskElement->label;
+            }
+        }
+
+        $lastname  = (string) ($object->array_options['options_digiriskdolibarr_ticket_lastname'] ?? '');
+        $firstname = (string) ($object->array_options['options_digiriskdolibarr_ticket_firstname'] ?? '');
+        $date      = $object->array_options['options_digiriskdolibarr_ticket_date'] ?? 0;
+
+        $substitutions = getCommonSubstitutionArray($langs, 0, null, $object);
+        complete_substitutions_array($substitutions, $langs, $object);
+
+        $substitutions['__TICKET_REF__']              = (string) $object->ref;
+        $substitutions['__TICKET_TRACK_ID__']         = (string) $object->track_id;
+        $substitutions['__TICKET_SUBJECT__']          = (string) $object->subject;
+        $substitutions['__TICKET_MESSAGE__']          = (string) $object->message;
+        $substitutions['__TICKET_DIGIRISK_ELEMENT__'] = implode(', ', $elementLabels);
+        $substitutions['__TICKET_DECLARANT__']        = trim(dol_strtoupper($lastname) . ' ' . $firstname);
+        $substitutions['__TICKET_DECLARATION_DATE__'] = !empty($date) ? dol_print_date($date, 'daytext', 'tzuser', $langs) : '';
+        $substitutions['__TICKET_LOCATION__']         = (string) ($object->array_options['options_digiriskdolibarr_ticket_location'] ?? '');
+        $substitutions['__TICKET_MANAGEMENT_URL__']   = DOL_MAIN_URL_ROOT . '/custom/digiriskdolibarr/view/ticket/ticket_card.php?id=' . $object->id;
+
+        return $substitutions;
     }
 }
